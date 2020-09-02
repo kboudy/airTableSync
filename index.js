@@ -4,8 +4,8 @@ const moment = require("moment"),
   fs = require("fs"),
   path = require("path");
 
-const base1 = require("airtable").base(process.env.BASE1_ID),
-  base2 = require("airtable").base(process.env.BASE2_ID);
+const baseOrigin = require("airtable").base(process.env.SOURCE_BASE_ID),
+  baseDestination = require("airtable").base(process.env.DESTINATION_BASE_ID);
 
 const AIRTABLE_AND_MOMENT_DATE_FORMAT = "ddd MMM D YYYY h:mm A ZZ";
 
@@ -65,17 +65,17 @@ const getFieldOnAllRecords = (base, tableName, fieldName) => {
 };
 
 const syncTable = async (
-  baseOrigin,
-  baseDestination,
+  bOrigin,
+  bDestination,
   tableName,
   lastPulled,
   uniqueField
 ) => {
   const originFields = Object.keys(
-    await getFieldOnAllRecords(baseOrigin, tableName, uniqueField)
+    await getFieldOnAllRecords(bOrigin, tableName, uniqueField)
   );
   const destinationFieldsAndIds = await getFieldOnAllRecords(
-    baseDestination,
+    bDestination,
     tableName,
     uniqueField
   );
@@ -91,7 +91,7 @@ const syncTable = async (
       idsToDelete.push(destinationFieldsAndIds[d]);
     }
     try {
-      await baseDestination(tableName).destroy(idsToDelete);
+      await bDestination(tableName).destroy(idsToDelete);
     } catch (err) {
       console.log(err);
       process.exit(1);
@@ -110,7 +110,7 @@ const syncTable = async (
     : {};
 
   return new Promise((resolve, reject) => {
-    baseOrigin(tableName)
+    bOrigin(tableName)
       .select(filterCriteria)
       .eachPage(
         async (records, fetchNextPage) => {
@@ -119,7 +119,7 @@ const syncTable = async (
             if (toAdd.includes(recUniqField)) {
               console.log(`Creating ${recUniqField}`);
               try {
-                await baseDestination(tableName).create([
+                await bDestination(tableName).create([
                   { fields: record.fields },
                 ]);
               } catch (err) {
@@ -129,7 +129,7 @@ const syncTable = async (
             } else {
               console.log(`Updating ${recUniqField}`);
               try {
-                await baseDestination(tableName).update([
+                await bDestination(tableName).update([
                   {
                     id: destinationFieldsAndIds[recUniqField],
                     fields: record.fields,
@@ -157,6 +157,12 @@ const syncTable = async (
 };
 
 (async () => {
-  await syncTable(base1, base2, "Fruits", loadLastRunDate(), "Name");
+  await syncTable(
+    baseOrigin,
+    baseDestination,
+    "Fruits",
+    loadLastRunDate(),
+    "Name"
+  );
   saveLastRunDate();
 })();
