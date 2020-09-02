@@ -2,11 +2,14 @@ require("dotenv").config();
 
 const moment = require("moment"),
   fs = require("fs"),
+  chalk = require("chalk"),
   path = require("path");
 
 const baseOrigin = require("airtable").base(process.env.SOURCE_BASE_ID),
   baseDestination = require("airtable").base(process.env.DESTINATION_BASE_ID);
 
+const TABLE_TO_SYNC = "Fruits";
+const UNIQUE_FIELD_NAME = "Name";
 const AIRTABLE_AND_MOMENT_DATE_FORMAT = "ddd MMM D YYYY h:mm A ZZ";
 
 const lastRunInfoPath = path.join(
@@ -84,14 +87,16 @@ const syncTable = async (
     (f) => !originFields.includes(f)
   );
 
+  const resultCounts = { updated: 0, deleted: 0, created: 0 };
   if (toDelete.length > 0) {
     const idsToDelete = [];
     for (const d of toDelete) {
-      console.log(`Deleting ${d}`);
+      console.log(chalk.gray(` - deleting "${d}"`));
       idsToDelete.push(destinationFieldsAndIds[d]);
     }
     try {
       await bDestination(tableName).destroy(idsToDelete);
+      resultCounts.deleted = resultCounts.deleted + idsToDelete.length;
     } catch (err) {
       console.log(err);
       process.exit(1);
@@ -117,17 +122,18 @@ const syncTable = async (
           for (const record of records) {
             const recUniqField = record.get(uniqueField);
             if (toAdd.includes(recUniqField)) {
-              console.log(`Creating ${recUniqField}`);
+              console.log(chalk.gray(` - creating "${recUniqField}"`));
               try {
                 await bDestination(tableName).create([
                   { fields: record.fields },
                 ]);
+                resultCounts.created++;
               } catch (err) {
                 console.log(err);
                 process.exit(1);
               }
             } else {
-              console.log(`Updating ${recUniqField}`);
+              console.log(chalk.gray(` - Updating "${recUniqField}"`));
               try {
                 await bDestination(tableName).update([
                   {
@@ -135,6 +141,7 @@ const syncTable = async (
                     fields: record.fields,
                   },
                 ]);
+                resultCounts.updated++;
               } catch (err) {
                 console.log(err);
                 process.exit(1);
@@ -149,7 +156,7 @@ const syncTable = async (
             reject(err);
             return;
           } else {
-            resolve();
+            resolve(resultCounts);
           }
         }
       );
@@ -157,12 +164,25 @@ const syncTable = async (
 };
 
 (async () => {
-  await syncTable(
+  console.log(`Synchronizing the "${TABLE_TO_SYNC}" table...`);
+  const resultCounts = await syncTable(
     baseOrigin,
     baseDestination,
-    "Fruits",
+    TABLE_TO_SYNC,
     loadLastRunDate(),
-    "Name"
+    UNIQUE_FIELD_NAME
   );
+  console.log();
+  if (
+    resultCounts.created + resultCounts.updated + resultCounts.deleted ===
+    0
+  ) {
+    console.log(chalk.blue(`(no changes since last run)`));
+  } else {
+    console.log(chalk.blue(`Results:`));
+    console.log(chalk.green(`  - created: ${resultCounts.created}`));
+    console.log(chalk.yellow(`  - updated: ${resultCounts.updated}`));
+    console.log(chalk.red(`  - deleted: ${resultCounts.deleted}`));
+  }
   saveLastRunDate();
 })();
