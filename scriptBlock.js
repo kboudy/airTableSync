@@ -1,6 +1,5 @@
 const API_BASE_URL = "https://api.airtable.com/v0/";
 const UNIQUE_FIELD = "Name";
-const DATE_FORMAT = "ddd MMM D YYYY h:mm A ZZ";
 
 const setLastSyncDate = async (timestamp) => {
   const syncTable = base.getTable("SyncInfo");
@@ -18,6 +17,11 @@ const getSyncInfo = async () => {
     lastSyncTimestamp: record.getCellValue("LastSyncTimestamp"),
     apiKey: record.getCellValue("ApiKey"),
     destinationBaseId: record.getCellValue("DestinationBaseId"),
+    tablesToSync: record
+      .getCellValue("TablesToSync")
+      .split(",")
+      .filter((r) => r)
+      .map((r) => r.trim()),
   };
   return syncInfo;
 };
@@ -55,7 +59,7 @@ const getRecords = async (baseId, tableName, fields, filterFormula) => {
     });
     const json = await response.json();
     if (json.error) {
-      throw new Error(json.error);
+      throw new Error(JSON.stringify(json.error));
     }
     allRecords.push(...json.records);
     offset = json.offset;
@@ -81,7 +85,7 @@ const createRecords = async (baseId, tableName, records) => {
     });
     const json = await response.json();
     if (json.error) {
-      throw new Error(json.error);
+      throw new Error(JSON.stringify(json.error));
     }
   }
 };
@@ -103,7 +107,7 @@ const updateRecords = async (baseId, tableName, records) => {
     });
     const json = await response.json();
     if (json.error) {
-      throw new Error(json.error);
+      throw new Error(JSON.stringify(json.error));
     }
   }
 };
@@ -126,58 +130,63 @@ const deleteRecords = async (baseId, tableName, ids) => {
     });
     const json = await response.json();
     if (json.error) {
-      throw new Error(json.error);
+      throw new Error(JSON.stringify(json.error));
     }
   }
 };
 
-const tableToSync = "Fruits";
-const jobTimestamp = new Date().getTime();
 const syncInfo = await getSyncInfo();
+const jobTimestamp = new Date().getTime();
 
-const sourceKeys = (await getRecords(base.id, tableToSync, [UNIQUE_FIELD])).map(
-  (r) => r.fields[UNIQUE_FIELD]
-);
-const destinationKeysAndIds = (
-  await getRecords(syncInfo.destinationBaseId, tableToSync, [UNIQUE_FIELD])
-).reduce((acc, r) => {
-  acc[r.fields[UNIQUE_FIELD]] = r.id;
-  return acc;
-}, {});
-const destinationKeys = Object.keys(destinationKeysAndIds);
+for (const tableToSync of syncInfo.tablesToSync) {
+  console.log(`Synchronizing table "${tableToSync}"`);
+  const sourceKeys = (
+    await getRecords(base.id, tableToSync, [UNIQUE_FIELD])
+  ).map((r) => r.fields[UNIQUE_FIELD]);
+  const destinationKeysAndIds = (
+    await getRecords(syncInfo.destinationBaseId, tableToSync, [UNIQUE_FIELD])
+  ).reduce((acc, r) => {
+    acc[r.fields[UNIQUE_FIELD]] = r.id;
+    return acc;
+  }, {});
+  const destinationKeys = Object.keys(destinationKeysAndIds);
 
-const keysToAdd = sourceKeys.filter((k) => !destinationKeys.includes(k));
-const keysToDelete = destinationKeys.filter((k) => !sourceKeys.includes(k));
+  const keysToAdd = sourceKeys.filter((k) => !destinationKeys.includes(k));
+  const keysToDelete = destinationKeys.filter((k) => !sourceKeys.includes(k));
 
-const filterFormula = syncInfo.lastSyncTimestamp
-  ? "DATETIME_DIFF(LAST_MODIFIED_TIME(), " +
-    `DATETIME_PARSE(${syncInfo.lastSyncTimestamp}, 'x'),` +
-    "'seconds') > 0"
-  : null;
-const changedSourceRecords = await getRecords(
-  base.id,
-  tableToSync,
-  null,
-  filterFormula
-);
-const recordsToAdd = [];
-const recordsToUpdate = [];
+  const filterFormula = syncInfo.lastSyncTimestamp
+    ? "DATETIME_DIFF(LAST_MODIFIED_TIME(), " +
+      `DATETIME_PARSE(${syncInfo.lastSyncTimestamp}, 'x'),` +
+      "'seconds') > 0"
+    : null;
+  const changedSourceRecords = await getRecords(
+    base.id,
+    tableToSync,
+    null,
+    filterFormula
+  );
+  const recordsToAdd = [];
+  const recordsToUpdate = [];
 
-for (const r of changedSourceRecords) {
-  const recordKey = r.fields[UNIQUE_FIELD];
-  if (keysToAdd.includes(recordKey)) {
-    recordsToAdd.push({ fields: r.fields });
-  } else {
-    recordsToUpdate.push({
-      id: destinationKeysAndIds[recordKey],
-      fields: r.fields,
-    });
+  for (const r of changedSourceRecords) {
+    const recordKey = r.fields[UNIQUE_FIELD];
+    if (keysToAdd.includes(recordKey)) {
+      recordsToAdd.push({ fields: r.fields });
+    } else {
+      recordsToUpdate.push({
+        id: destinationKeysAndIds[recordKey],
+        fields: r.fields,
+      });
+    }
   }
+  console.log(` - creating ${recordsToAdd.length} records...`);
+  await createRecords(syncInfo.destinationBaseId, tableToSync, recordsToAdd);
+
+  console.log(` - updating ${recordsToUpdate.length} records...`);
+  await updateRecords(syncInfo.destinationBaseId, tableToSync, recordsToUpdate);
+
+  console.log(` - deleting ${keysToDelete.length} records...`);
+  const idsToDelete = keysToDelete.map((k) => destinationKeysAndIds[k]);
+  await deleteRecords(syncInfo.destinationBaseId, tableToSync, idsToDelete);
 }
-await createRecords(syncInfo.destinationBaseId, tableToSync, recordsToAdd);
-
-await updateRecords(syncInfo.destinationBaseId, tableToSync, recordsToUpdate);
-
-const idsToDelete = keysToDelete.map((k) => destinationKeysAndIds[k]);
-await deleteRecords(syncInfo.destinationBaseId, tableToSync, idsToDelete);
 await setLastSyncDate(jobTimestamp);
