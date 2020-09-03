@@ -4,6 +4,7 @@ NOTE: This is designed to live in a script block, on airTable
 
 *************************************************************/
 
+const MAX_RECORDS_PER_REQUEST = 10;
 const API_BASE_URL = "https://api.airtable.com/v0/";
 const UNIQUE_FIELD = "Name";
 
@@ -79,8 +80,8 @@ const createRecords = async (baseId, tableName, records) => {
   let remainingRecords = [...records];
 
   while (remainingRecords.length > 0) {
-    const currentChunk = remainingRecords.slice(0, 10);
-    remainingRecords = remainingRecords.slice(10);
+    const currentChunk = remainingRecords.slice(0, MAX_RECORDS_PER_REQUEST);
+    remainingRecords = remainingRecords.slice(MAX_RECORDS_PER_REQUEST);
     const response = await fetch(`${API_BASE_URL}${baseId}/${tableName}?`, {
       headers: {
         Authorization: `Bearer ${syncInfo.apiKey}`,
@@ -101,8 +102,8 @@ const updateRecords = async (baseId, tableName, records) => {
   let remainingRecords = [...records];
 
   while (remainingRecords.length > 0) {
-    const currentChunk = remainingRecords.slice(0, 10);
-    remainingRecords = remainingRecords.slice(10);
+    const currentChunk = remainingRecords.slice(0, MAX_RECORDS_PER_REQUEST);
+    remainingRecords = remainingRecords.slice(MAX_RECORDS_PER_REQUEST);
     const response = await fetch(`${API_BASE_URL}${baseId}/${tableName}?`, {
       headers: {
         Authorization: `Bearer ${syncInfo.apiKey}`,
@@ -123,8 +124,8 @@ const deleteRecords = async (baseId, tableName, ids) => {
   let remainingIds = [...ids];
 
   while (remainingIds.length > 0) {
-    const currentChunkIds = remainingIds.slice(0, 10);
-    remainingIds = remainingIds.slice(10);
+    const currentChunkIds = remainingIds.slice(0, MAX_RECORDS_PER_REQUEST);
+    remainingIds = remainingIds.slice(MAX_RECORDS_PER_REQUEST);
     let queryUrl = `${API_BASE_URL}${baseId}/${tableName}?`;
     for (const id of currentChunkIds) {
       queryUrl = `${queryUrl}&${encodeURIComponent("records[]")}=${id}&`;
