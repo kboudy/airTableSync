@@ -1,3 +1,9 @@
+/*************************************************************
+
+NOTE: This is designed to live in a script block, on airTable
+
+*************************************************************/
+
 const API_BASE_URL = "https://api.airtable.com/v0/";
 const UNIQUE_FIELD = "Name";
 
