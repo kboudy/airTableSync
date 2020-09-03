@@ -138,8 +138,13 @@ const deleteRecords = async (baseId, tableName, ids) => {
 const syncInfo = await getSyncInfo();
 const jobTimestamp = new Date().getTime();
 
+output.markdown(
+  `## Tables to synchronize: ${syncInfo.tablesToSync
+    .map((t) => "`" + t + "`")
+    .join(",")}`
+);
 for (const tableToSync of syncInfo.tablesToSync) {
-  console.log(`Synchronizing table "${tableToSync}"`);
+  output.markdown(`#### Synchronizing table "${tableToSync}"`);
   const sourceKeys = (
     await getRecords(base.id, tableToSync, [UNIQUE_FIELD])
   ).map((r) => r.fields[UNIQUE_FIELD]);
@@ -179,13 +184,13 @@ for (const tableToSync of syncInfo.tablesToSync) {
       });
     }
   }
-  console.log(` - creating ${recordsToAdd.length} records...`);
+  output.markdown(`  - creating ${recordsToAdd.length} records...`);
   await createRecords(syncInfo.destinationBaseId, tableToSync, recordsToAdd);
 
-  console.log(` - updating ${recordsToUpdate.length} records...`);
+  output.markdown(`  - updating ${recordsToUpdate.length} records...`);
   await updateRecords(syncInfo.destinationBaseId, tableToSync, recordsToUpdate);
 
-  console.log(` - deleting ${keysToDelete.length} records...`);
+  output.markdown(`  - deleting ${keysToDelete.length} records...`);
   const idsToDelete = keysToDelete.map((k) => destinationKeysAndIds[k]);
   await deleteRecords(syncInfo.destinationBaseId, tableToSync, idsToDelete);
 }
