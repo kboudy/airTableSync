@@ -6,22 +6,12 @@ NOTE: This is designed to live in a script block, on airTable
 
 const MAX_RECORDS_PER_REQUEST = 10;
 const API_BASE_URL = "https://api.airtable.com/v0/";
-const UNIQUE_FIELD = "Name";
-
-const setLastSyncDate = async (timestamp) => {
-  const syncTable = base.getTable("SyncInfo");
-  const query = await syncTable.selectRecordsAsync();
-  await syncTable.updateRecordAsync(query.records[0], {
-    LastSyncTimestamp: timestamp,
-  });
-};
 
 const getSyncInfo = async () => {
   const syncTable = base.getTable("SyncInfo");
   const query = await syncTable.selectRecordsAsync();
   const record = query.records[0];
   const syncInfo = {
-    lastSyncTimestamp: record.getCellValue("LastSyncTimestamp"),
     destinationApiKey: record.getCellValue("DestinationApiKey"),
     destinationBaseId: record.getCellValue("DestinationBaseId"),
     tablesToSync: record
@@ -31,6 +21,19 @@ const getSyncInfo = async () => {
       .map((r) => r.trim()),
   };
   return syncInfo;
+};
+
+const getRecord = async (apiKey, baseId, tableName, recordId) => {
+  let queryUrl = `${API_BASE_URL}${baseId}/${tableName}/${recordId}`;
+
+  const response = await fetch(queryUrl, {
+    headers: { Authorization: `Bearer ${apiKey}` },
+  });
+  const json = await response.json();
+  if (json.error) {
+    throw new Error(JSON.stringify(json.error));
+  }
+  return json;
 };
 
 const getRecords = async (apiKey, baseId, tableName, fields, filterFormula) => {
@@ -94,6 +97,7 @@ const createRecords = async (apiKey, baseId, tableName, records) => {
     if (json.error) {
       throw new Error(JSON.stringify(json.error));
     }
+    return json;
   }
 };
 
@@ -154,87 +158,75 @@ for (const tableToSync of syncInfo.tablesToSync) {
   output.markdown(`#### Synchronizing table "${tableToSync}"`);
 
   const sourceTable = base.getTable(tableToSync);
-  const sourceFieldNames = sourceTable.fields
-    .map((f) => f.name)
-    .filter((n) => n !== "id");
+  const sourceFieldNames = sourceTable.fields.map((f) => f.name);
   const sourceRecords = (await sourceTable.selectRecordsAsync()).records;
-  const sourceKeys = sourceRecords.map((r) => r[UNIQUE_FIELD]);
+  const sourceRecordIds = sourceRecords.map((sr) => sr.id);
 
   /*
-     sourceDestinationIdMapping is an object in the format:
+       sourceDestinationIdMapping is an object in the format:
+  
+       { sourceRecordId: destinationRecordId, ... }
+      */
+  const destSourceIds = await getRecords(
+    syncInfo.destinationApiKey,
+    syncInfo.destinationBaseId,
+    tableToSync,
+    ["source_id"]
+  );
+  const sourceDestinationIdMapping = destSourceIds
+    .filter((r) => sourceRecordIds.includes(r.fields.source_id))
+    .reduce((acc, r) => {
+      acc[r.fields.source_id] = r.id;
+      return acc;
+    }, {});
 
-     { destinationRecordId: sourceRecordId, ... }
-    */
-  const sourceDestinationIdMapping = (
-    await getRecords(
-      syncInfo.destinationApiKey,
-      syncInfo.destinationBaseId,
-      tableToSync,
-      ["source_id"]
-    )
-  ).reduce((acc, r) => {
-    acc[r.fields.source_id] = r.id;
-    return acc;
-  }, {});
+  const counts = { create: 0, update: 0, delete: 0 };
 
-  console.log(sourceDestinationIdMapping);
-
-  const destinationKeysAndIds = (
-    await getRecords(
-      syncInfo.destinationApiKey,
-      syncInfo.destinationBaseId,
-      tableToSync,
-      [UNIQUE_FIELD]
-    )
-  ).reduce((acc, r) => {
-    acc[r.fields[UNIQUE_FIELD]] = r.id;
-    return acc;
-  }, {});
-  const destinationKeys = Object.keys(destinationKeysAndIds);
-
-  const keysToAdd = sourceKeys.filter((k) => !destinationKeys.includes(k));
-  const keysToDelete = destinationKeys.filter((k) => !sourceKeys.includes(k));
-
-  const recordsToAdd = [];
-  const recordsToUpdate = [];
-
-  for (const r of sourceRecords) {
-    const recordKey = r[UNIQUE_FIELD];
-    const destinationRecord = { ...r, source_id: r.id };
-    delete destinationRecord.id;
-
-    if (keysToAdd.includes(recordKey)) {
-      recordsToAdd.push({ fields: destinationRecord });
+  // for each source record, if there's a corresponding destination record, update it.  Otherwise, add it;
+  for (const sr of sourceRecords) {
+    if (sourceDestinationIdMapping[sr.id]) {
+      // it exists - update it;
+      counts.update++;
+      const destinationRecord = {};
+      for (const sfn of sourceFieldNames) {
+        destinationRecord[sfn] = await sr.getCellValue(sfn);
+      }
+      await updateRecords(
+        syncInfo.destinationApiKey,
+        syncInfo.destinationBaseId,
+        tableToSync,
+        [{ id: sourceDestinationIdMapping[sr.id], fields: destinationRecord }]
+      );
     } else {
-      recordsToUpdate.push({
-        id: destinationKeysAndIds[recordKey],
-        fields: destinationRecord,
-      });
+      // it doesn't exist - add it;
+      counts.create++;
+      const destinationRecord = { source_id: sr.id };
+      for (const sfn of sourceFieldNames) {
+        destinationRecord[sfn] = await sr.getCellValue(sfn);
+      }
+      await createRecords(
+        syncInfo.destinationApiKey,
+        syncInfo.destinationBaseId,
+        tableToSync,
+        [{ fields: destinationRecord }]
+      );
     }
   }
-  output.markdown(`  - creating ${recordsToAdd.length} records...`);
-  await createRecords(
-    syncInfo.destinationApiKey,
-    syncInfo.destinationBaseId,
-    tableToSync,
-    recordsToAdd
-  );
 
-  output.markdown(`  - updating ${recordsToUpdate.length} records...`);
-  await updateRecords(
-    syncInfo.destinationApiKey,
-    syncInfo.destinationBaseId,
-    tableToSync,
-    recordsToUpdate
-  );
+  const destinationIdsToDelete = destSourceIds
+    .filter((r) => !sourceRecordIds.includes(r.fields.source_id))
+    .map((r) => r.id);
+  for (const id of destinationIdsToDelete) {
+    await deleteRecords(
+      syncInfo.destinationApiKey,
+      syncInfo.destinationBaseId,
+      tableToSync,
+      [id]
+    );
+    counts.delete++;
+  }
 
-  output.markdown(`  - deleting ${keysToDelete.length} records...`);
-  const idsToDelete = keysToDelete.map((k) => destinationKeysAndIds[k]);
-  await deleteRecords(
-    syncInfo.destinationApiKey,
-    syncInfo.destinationBaseId,
-    tableToSync,
-    idsToDelete
-  );
+  output.markdown(`* created: ${counts.create}`);
+  output.markdown(`* updated: ${counts.update}`);
+  output.markdown(`* deleted: ${counts.delete}`);
 }
-await setLastSyncDate(jobTimestamp);
