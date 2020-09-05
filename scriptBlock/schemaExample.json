@@ -1,0 +1,32 @@
+{
+  "Fruits": [
+    {
+      "name": "Name"
+    },
+    {
+      "name": "Color"
+    },
+    {
+      "name": "Images"
+    },
+    {
+      "name": "Vendor",
+      "link": {
+        "table": "Vendor",
+        "field": "Fruits"
+      }
+    }
+  ],
+  "Vendor": [
+    {
+      "name": "Name"
+    },
+    {
+      "name": "Fruits",
+      "link": {
+        "table": "Fruits",
+        "field": "Vendor"
+      }
+    }
+  ]
+}

@@ -158,12 +158,24 @@ const deleteRecords = async (apiKey, baseId, tableName, ids) => {
   }
 };
 
+const isAttachment = (obj) => {
+  return (
+    obj &&
+    Array.isArray(obj) &&
+    obj.length > 0 &&
+    obj[0].id &&
+    obj[0].url &&
+    obj[0].filename &&
+    obj[0].size
+  );
+};
+
 const getIdMapping = async (tableName) => {
   /*
-      sourceDestinationIdMapping is an object in the format:
-      
-      { sourceRecordId: destinationRecordId, ... }
-    */
+          sourceDestinationIdMapping is an object in the format:
+          
+          { sourceRecordId: destinationRecordId, ... }
+        */
   const sourceRecordIds = (
     await base.getTable(tableName).selectRecordsAsync()
   ).records.map((sr) => sr.id);
@@ -226,15 +238,26 @@ for (const tableToSync of syncInfo.tablesToSync) {
       const destinationRecord = {};
       for (const sfn of commonFieldNames) {
         destinationRecord[sfn] = await sr.getCellValue(sfn);
+        if (isAttachment(destinationRecord[sfn])) {
+          //NOTE: Jake only wants to bring across the first attachment
+          destinationRecord[sfn] = [
+            {
+              url: destinationRecord[sfn][0].url,
+              fileName: destinationRecord[sfn][0].fileName,
+            },
+          ];
+        }
         const link = syncInfo.destinationSchema[tableToSync].filter(
           (f) => f.name === sfn
         )[0].link;
         if (link) {
           // it's a linked field
           const linkIdMapping = idMappingByTable[link.table].idMapping;
-          destinationRecord[sfn] = destinationRecord[sfn]
-            .filter((r) => linkIdMapping[r.id])
-            .map((r) => linkIdMapping[r.id]);
+          if (destinationRecord[sfn]) {
+            destinationRecord[sfn] = destinationRecord[sfn]
+              .filter((r) => linkIdMapping[r.id])
+              .map((r) => linkIdMapping[r.id]);
+          }
         }
       }
       await updateRecords(
@@ -249,15 +272,26 @@ for (const tableToSync of syncInfo.tablesToSync) {
       const destinationRecord = { [SOURCE_ID]: sr.id };
       for (const sfn of commonFieldNames) {
         destinationRecord[sfn] = await sr.getCellValue(sfn);
+        if (isAttachment(destinationRecord[sfn])) {
+          //NOTE: Jake only wants to bring across the first attachment
+          destinationRecord[sfn] = [
+            {
+              url: destinationRecord[sfn][0].url,
+              fileName: destinationRecord[sfn][0].fileName,
+            },
+          ];
+        }
         const link = syncInfo.destinationSchema[tableToSync].filter(
           (f) => f.name === sfn
         )[0].link;
         if (link) {
           // it's a linked field
           const linkIdMapping = idMappingByTable[link.table].idMapping;
-          destinationRecord[sfn] = destinationRecord[sfn]
-            .filter((r) => linkIdMapping[r.id])
-            .map((r) => linkIdMapping[r.id]);
+          if (destinationRecord[sfn]) {
+            destinationRecord[sfn] = destinationRecord[sfn]
+              .filter((r) => linkIdMapping[r.id])
+              .map((r) => linkIdMapping[r.id]);
+          }
         }
       }
       await createRecords(
@@ -281,6 +315,9 @@ for (const tableToSync of syncInfo.tablesToSync) {
     );
     counts.delete++;
   }
+
+  // update the id mapping for this table (so any linked fields in subsequent tables get the new ids)
+  idMappingByTable[tableToSync] = await getIdMapping(tableToSync);
 
   output.markdown(`* created: ${counts.create}`);
   output.markdown(`* updated: ${counts.update}`);
