@@ -194,6 +194,42 @@ const getIdMapping = async (tableName) => {
   return { allSourceIdsInDestination, idMapping };
 };
 
+const getDestinationRecord = async (
+  sourceRecord,
+  table,
+  syncInfo,
+  idMappingByTable,
+  commonFieldNames
+) => {
+  const destinationRecord = {};
+  for (const sfn of commonFieldNames) {
+    destinationRecord[sfn] = await sourceRecord.getCellValue(sfn);
+    if (isAttachment(destinationRecord[sfn])) {
+      //NOTE: Jake only wants to bring across the first attachment
+      destinationRecord[sfn] = [
+        {
+          url: destinationRecord[sfn][0].url,
+          fileName: destinationRecord[sfn][0].fileName,
+        },
+      ];
+    }
+    const { link } = syncInfo.destinationSchema[table].filter(
+      (f) => f.name === sfn
+    )[0];
+    if (link) {
+      // it's a linked field
+      const linkIdMapping = idMappingByTable[link.table].idMapping;
+      if (destinationRecord[sfn]) {
+        destinationRecord[sfn] = destinationRecord[sfn]
+          .filter((r) => linkIdMapping[r.id])
+          .map((r) => linkIdMapping[r.id]);
+      }
+    }
+  }
+  destinationRecord[SOURCE_ID] = sourceRecord.id;
+  return destinationRecord;
+};
+
 //-------------------------------------------------------------------------------------------
 
 const syncInfo = await getSyncInfo();
@@ -235,7 +271,14 @@ for (const tableToSync of syncInfo.tablesToSync) {
     if (idMapping[sr.id]) {
       // it exists - update it;
       counts.update++;
-      const destinationRecord = {};
+      const destinationRecord = await getDestinationRecord(
+        sr,
+        tableToSync,
+        syncInfo,
+        idMappingByTable,
+        commonFieldNames
+      );
+
       for (const sfn of commonFieldNames) {
         destinationRecord[sfn] = await sr.getCellValue(sfn);
         if (isAttachment(destinationRecord[sfn])) {
@@ -269,7 +312,13 @@ for (const tableToSync of syncInfo.tablesToSync) {
     } else {
       // it doesn't exist - add it;
       counts.create++;
-      const destinationRecord = { [SOURCE_ID]: sr.id };
+      const destinationRecord = await getDestinationRecord(
+        sr,
+        tableToSync,
+        syncInfo,
+        idMappingByTable,
+        commonFieldNames
+      );
       for (const sfn of commonFieldNames) {
         destinationRecord[sfn] = await sr.getCellValue(sfn);
         if (isAttachment(destinationRecord[sfn])) {
