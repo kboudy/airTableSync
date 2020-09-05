@@ -22,7 +22,7 @@ const getSyncInfo = async () => {
   const record = query.records[0];
   const syncInfo = {
     lastSyncTimestamp: record.getCellValue("LastSyncTimestamp"),
-    apiKey: record.getCellValue("ApiKey"),
+    destinationApiKey: record.getCellValue("DestinationApiKey"),
     destinationBaseId: record.getCellValue("DestinationBaseId"),
     tablesToSync: record
       .getCellValue("TablesToSync")
@@ -33,7 +33,7 @@ const getSyncInfo = async () => {
   return syncInfo;
 };
 
-const getRecords = async (baseId, tableName, fields, filterFormula) => {
+const getRecords = async (apiKey, baseId, tableName, fields, filterFormula) => {
   const allRecords = [];
   let offset;
   do {
@@ -62,7 +62,7 @@ const getRecords = async (baseId, tableName, fields, filterFormula) => {
     queryUrl = queryUrl.slice(0, queryUrl.length - 1);
 
     const response = await fetch(queryUrl, {
-      headers: { Authorization: `Bearer ${syncInfo.apiKey}` },
+      headers: { Authorization: `Bearer ${apiKey}` },
     });
     const json = await response.json();
     if (json.error) {
@@ -75,7 +75,7 @@ const getRecords = async (baseId, tableName, fields, filterFormula) => {
   return allRecords;
 };
 
-const createRecords = async (baseId, tableName, records) => {
+const createRecords = async (apiKey, baseId, tableName, records) => {
   // NOTE: airtable REST API for "create" method allows a max of 10 records per request
   let remainingRecords = [...records];
 
@@ -84,7 +84,7 @@ const createRecords = async (baseId, tableName, records) => {
     remainingRecords = remainingRecords.slice(MAX_RECORDS_PER_REQUEST);
     const response = await fetch(`${API_BASE_URL}${baseId}/${tableName}?`, {
       headers: {
-        Authorization: `Bearer ${syncInfo.apiKey}`,
+        Authorization: `Bearer ${apiKey}`,
         "Content-Type": "application/json",
       },
       method: "POST",
@@ -97,7 +97,7 @@ const createRecords = async (baseId, tableName, records) => {
   }
 };
 
-const updateRecords = async (baseId, tableName, records) => {
+const updateRecords = async (apiKey, baseId, tableName, records) => {
   // NOTE: airtable REST API for "update" method allows a max of 10 records per request
   let remainingRecords = [...records];
 
@@ -106,7 +106,7 @@ const updateRecords = async (baseId, tableName, records) => {
     remainingRecords = remainingRecords.slice(MAX_RECORDS_PER_REQUEST);
     const response = await fetch(`${API_BASE_URL}${baseId}/${tableName}?`, {
       headers: {
-        Authorization: `Bearer ${syncInfo.apiKey}`,
+        Authorization: `Bearer ${apiKey}`,
         "Content-Type": "application/json",
       },
       method: "PATCH",
@@ -119,7 +119,7 @@ const updateRecords = async (baseId, tableName, records) => {
   }
 };
 
-const deleteRecords = async (baseId, tableName, ids) => {
+const deleteRecords = async (apiKey, baseId, tableName, ids) => {
   // NOTE: airtable REST API for "delete" method allows a max of 10 records per request
   let remainingIds = [...ids];
 
@@ -132,7 +132,7 @@ const deleteRecords = async (baseId, tableName, ids) => {
     }
     queryUrl = queryUrl.slice(0, queryUrl.length - 1);
     const response = await fetch(queryUrl, {
-      headers: { Authorization: `Bearer ${syncInfo.apiKey}` },
+      headers: { Authorization: `Bearer ${apiKey}` },
       method: "DELETE",
     });
     const json = await response.json();
@@ -152,11 +152,40 @@ output.markdown(
 );
 for (const tableToSync of syncInfo.tablesToSync) {
   output.markdown(`#### Synchronizing table "${tableToSync}"`);
-  const sourceKeys = (
-    await getRecords(base.id, tableToSync, [UNIQUE_FIELD])
-  ).map((r) => r.fields[UNIQUE_FIELD]);
+
+  const sourceTable = base.getTable(tableToSync);
+  const sourceFieldNames = sourceTable.fields
+    .map((f) => f.name)
+    .filter((n) => n !== "id");
+  const sourceRecords = (await sourceTable.selectRecordsAsync()).records;
+  const sourceKeys = sourceRecords.map((r) => r[UNIQUE_FIELD]);
+
+  /*
+     sourceDestinationIdMapping is an object in the format:
+
+     { destinationRecordId: sourceRecordId, ... }
+    */
+  const sourceDestinationIdMapping = (
+    await getRecords(
+      syncInfo.destinationApiKey,
+      syncInfo.destinationBaseId,
+      tableToSync,
+      ["source_id"]
+    )
+  ).reduce((acc, r) => {
+    acc[r.fields.source_id] = r.id;
+    return acc;
+  }, {});
+
+  console.log(sourceDestinationIdMapping);
+
   const destinationKeysAndIds = (
-    await getRecords(syncInfo.destinationBaseId, tableToSync, [UNIQUE_FIELD])
+    await getRecords(
+      syncInfo.destinationApiKey,
+      syncInfo.destinationBaseId,
+      tableToSync,
+      [UNIQUE_FIELD]
+    )
   ).reduce((acc, r) => {
     acc[r.fields[UNIQUE_FIELD]] = r.id;
     return acc;
@@ -166,39 +195,46 @@ for (const tableToSync of syncInfo.tablesToSync) {
   const keysToAdd = sourceKeys.filter((k) => !destinationKeys.includes(k));
   const keysToDelete = destinationKeys.filter((k) => !sourceKeys.includes(k));
 
-  const filterFormula = syncInfo.lastSyncTimestamp
-    ? "DATETIME_DIFF(LAST_MODIFIED_TIME(), " +
-      `DATETIME_PARSE(${syncInfo.lastSyncTimestamp}, 'x'),` +
-      "'seconds') > 0"
-    : null;
-  const changedSourceRecords = await getRecords(
-    base.id,
-    tableToSync,
-    null,
-    filterFormula
-  );
   const recordsToAdd = [];
   const recordsToUpdate = [];
 
-  for (const r of changedSourceRecords) {
-    const recordKey = r.fields[UNIQUE_FIELD];
+  for (const r of sourceRecords) {
+    const recordKey = r[UNIQUE_FIELD];
+    const destinationRecord = { ...r, source_id: r.id };
+    delete destinationRecord.id;
+
     if (keysToAdd.includes(recordKey)) {
-      recordsToAdd.push({ fields: r.fields });
+      recordsToAdd.push({ fields: destinationRecord });
     } else {
       recordsToUpdate.push({
         id: destinationKeysAndIds[recordKey],
-        fields: r.fields,
+        fields: destinationRecord,
       });
     }
   }
   output.markdown(`  - creating ${recordsToAdd.length} records...`);
-  await createRecords(syncInfo.destinationBaseId, tableToSync, recordsToAdd);
+  await createRecords(
+    syncInfo.destinationApiKey,
+    syncInfo.destinationBaseId,
+    tableToSync,
+    recordsToAdd
+  );
 
   output.markdown(`  - updating ${recordsToUpdate.length} records...`);
-  await updateRecords(syncInfo.destinationBaseId, tableToSync, recordsToUpdate);
+  await updateRecords(
+    syncInfo.destinationApiKey,
+    syncInfo.destinationBaseId,
+    tableToSync,
+    recordsToUpdate
+  );
 
   output.markdown(`  - deleting ${keysToDelete.length} records...`);
   const idsToDelete = keysToDelete.map((k) => destinationKeysAndIds[k]);
-  await deleteRecords(syncInfo.destinationBaseId, tableToSync, idsToDelete);
+  await deleteRecords(
+    syncInfo.destinationApiKey,
+    syncInfo.destinationBaseId,
+    tableToSync,
+    idsToDelete
+  );
 }
 await setLastSyncDate(jobTimestamp);
