@@ -203,7 +203,9 @@ for (const tableToSync of syncInfo.tablesToSync) {
 
   const sourceTable = base.getTable(tableToSync);
   const sourceFieldNames = sourceTable.fields.map((f) => f.name);
-  const destinationFieldNames = syncInfo.destinationSchema[tableToSync];
+  const destinationFieldNames = syncInfo.destinationSchema[tableToSync].map(
+    (f) => f.name
+  );
   const commonFieldNames = sourceFieldNames.filter((sfn) =>
     destinationFieldNames.includes(sfn)
   );
@@ -224,12 +226,15 @@ for (const tableToSync of syncInfo.tablesToSync) {
       const destinationRecord = {};
       for (const sfn of commonFieldNames) {
         destinationRecord[sfn] = await sr.getCellValue(sfn);
-        if (
-          Array.isArray(destinationRecord[sfn]) &&
-          destinationRecord[sfn].length > 0 &&
-          destinationRecord[sfn][0].id
-        ) {
-          destinationRecord[sfn] = destinationRecord[sfn].map((r) => r.name);
+        const link = syncInfo.destinationSchema[tableToSync].filter(
+          (f) => f.name === sfn
+        )[0].link;
+        if (link) {
+          // it's a linked field
+          const linkIdMapping = idMappingByTable[link.table].idMapping;
+          destinationRecord[sfn] = destinationRecord[sfn]
+            .filter((r) => linkIdMapping[r.id])
+            .map((r) => linkIdMapping[r.id]);
         }
       }
       await updateRecords(
@@ -244,12 +249,15 @@ for (const tableToSync of syncInfo.tablesToSync) {
       const destinationRecord = { [SOURCE_ID]: sr.id };
       for (const sfn of commonFieldNames) {
         destinationRecord[sfn] = await sr.getCellValue(sfn);
-        if (
-          Array.isArray(destinationRecord[sfn]) &&
-          destinationRecord[sfn].length > 0 &&
-          destinationRecord[sfn][0].id
-        ) {
-          destinationRecord[sfn] = destinationRecord[sfn].map((r) => r.id);
+        const link = syncInfo.destinationSchema[tableToSync].filter(
+          (f) => f.name === sfn
+        )[0].link;
+        if (link) {
+          // it's a linked field
+          const linkIdMapping = idMappingByTable[link.table].idMapping;
+          destinationRecord[sfn] = destinationRecord[sfn]
+            .filter((r) => linkIdMapping[r.id])
+            .map((r) => linkIdMapping[r.id]);
         }
       }
       await createRecords(
