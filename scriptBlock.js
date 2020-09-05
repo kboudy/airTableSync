@@ -15,6 +15,7 @@ const getSyncInfo = async () => {
   const syncInfo = {
     destinationApiKey: record.getCellValue("DestinationApiKey"),
     destinationBaseId: record.getCellValue("DestinationBaseId"),
+    destinationSchema: JSON.parse(record.getCellValue("DestinationSchema")),
     tablesToSync: record
       .getCellValue("TablesToSync")
       .split(",")
@@ -89,21 +90,6 @@ const getRecords = async (
   return allRecords;
 };
 
-const getFieldNames = async (apiKey, baseId, tableName) => {
-  // hack.  Will grab a small group of records from the destination to get the field names
-  // (since API doesn't provide a metadata request method.  Choosing "20" records to ensure we get all fields)
-  const records = await getRecords(apiKey, baseId, tableName, null, null, 20);
-  const fieldNames = [];
-  for (const r of records) {
-    for (const f of Object.keys(r.fields)) {
-      if (!fieldNames.includes(f)) {
-        fieldNames.push(f);
-      }
-    }
-  }
-  return fieldNames;
-};
-
 const createRecords = async (apiKey, baseId, tableName, records) => {
   // NOTE: airtable REST API for "create" method allows a max of 10 records per request
   let remainingRecords = [...records];
@@ -172,6 +158,30 @@ const deleteRecords = async (apiKey, baseId, tableName, ids) => {
   }
 };
 
+const getIdMapping = async (tableName) => {
+  /*
+      sourceDestinationIdMapping is an object in the format:
+      
+      { sourceRecordId: destinationRecordId, ... }
+    */
+  const sourceRecordIds = (
+    await base.getTable(tableName).selectRecordsAsync()
+  ).records.map((sr) => sr.id);
+  const allSourceIdsInDestination = await getRecords(
+    syncInfo.destinationApiKey,
+    syncInfo.destinationBaseId,
+    tableName,
+    [SOURCE_ID]
+  );
+  const idMapping = allSourceIdsInDestination
+    .filter((r) => sourceRecordIds.includes(r.fields[SOURCE_ID]))
+    .reduce((acc, r) => {
+      acc[r.fields[SOURCE_ID]] = r.id;
+      return acc;
+    }, {});
+  return { allSourceIdsInDestination, idMapping };
+};
+
 //-------------------------------------------------------------------------------------------
 
 const syncInfo = await getSyncInfo();
@@ -183,56 +193,50 @@ output.markdown(
     .join(",")}`
 );
 
+const idMappingByTable = {};
+for (const table of syncInfo.tablesToSync) {
+  idMappingByTable[table] = await getIdMapping(table);
+}
+
 for (const tableToSync of syncInfo.tablesToSync) {
   output.markdown(`#### Synchronizing table "${tableToSync}"`);
 
   const sourceTable = base.getTable(tableToSync);
   const sourceFieldNames = sourceTable.fields.map((f) => f.name);
-  const destinationFieldNames = await getFieldNames(
-    syncInfo.destinationApiKey,
-    syncInfo.destinationBaseId,
-    tableToSync
-  );
+  const destinationFieldNames = syncInfo.destinationSchema[tableToSync];
   const commonFieldNames = sourceFieldNames.filter((sfn) =>
     destinationFieldNames.includes(sfn)
   );
   const sourceRecords = (await sourceTable.selectRecordsAsync()).records;
   const sourceRecordIds = sourceRecords.map((sr) => sr.id);
 
-  /*
-      sourceDestinationIdMapping is an object in the format:
-      
-      { sourceRecordId: destinationRecordId, ... }
-    */
-  const destSourceIds = await getRecords(
-    syncInfo.destinationApiKey,
-    syncInfo.destinationBaseId,
-    tableToSync,
-    [SOURCE_ID]
-  );
-  const sourceDestinationIdMapping = destSourceIds
-    .filter((r) => sourceRecordIds.includes(r.fields[SOURCE_ID]))
-    .reduce((acc, r) => {
-      acc[r.fields[SOURCE_ID]] = r.id;
-      return acc;
-    }, {});
+  const { allSourceIdsInDestination, idMapping } = idMappingByTable[
+    tableToSync
+  ];
 
   const counts = { create: 0, update: 0, delete: 0 };
 
   // for each source record, if there's a corresponding destination record, update it.  Otherwise, add it;
   for (const sr of sourceRecords) {
-    if (sourceDestinationIdMapping[sr.id]) {
+    if (idMapping[sr.id]) {
       // it exists - update it;
       counts.update++;
       const destinationRecord = {};
       for (const sfn of commonFieldNames) {
         destinationRecord[sfn] = await sr.getCellValue(sfn);
+        if (
+          Array.isArray(destinationRecord[sfn]) &&
+          destinationRecord[sfn].length > 0 &&
+          destinationRecord[sfn][0].id
+        ) {
+          destinationRecord[sfn] = destinationRecord[sfn].map((r) => r.name);
+        }
       }
       await updateRecords(
         syncInfo.destinationApiKey,
         syncInfo.destinationBaseId,
         tableToSync,
-        [{ id: sourceDestinationIdMapping[sr.id], fields: destinationRecord }]
+        [{ id: idMapping[sr.id], fields: destinationRecord }]
       );
     } else {
       // it doesn't exist - add it;
@@ -240,6 +244,13 @@ for (const tableToSync of syncInfo.tablesToSync) {
       const destinationRecord = { [SOURCE_ID]: sr.id };
       for (const sfn of commonFieldNames) {
         destinationRecord[sfn] = await sr.getCellValue(sfn);
+        if (
+          Array.isArray(destinationRecord[sfn]) &&
+          destinationRecord[sfn].length > 0 &&
+          destinationRecord[sfn][0].id
+        ) {
+          destinationRecord[sfn] = destinationRecord[sfn].map((r) => r.id);
+        }
       }
       await createRecords(
         syncInfo.destinationApiKey,
@@ -250,7 +261,7 @@ for (const tableToSync of syncInfo.tablesToSync) {
     }
   }
 
-  const destinationIdsToDelete = destSourceIds
+  const destinationIdsToDelete = allSourceIdsInDestination
     .filter((r) => !sourceRecordIds.includes(r.fields[SOURCE_ID]))
     .map((r) => r.id);
   for (const id of destinationIdsToDelete) {
