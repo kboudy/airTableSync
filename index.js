@@ -1,188 +1,232 @@
-require("dotenv").config();
+/*************************************************************
 
-const moment = require("moment"),
-  fs = require("fs"),
-  chalk = require("chalk"),
-  path = require("path");
+NOTE: This is designed to live in a script block, on airTable
 
-const baseOrigin = require("airtable").base(process.env.SOURCE_BASE_ID),
-  baseDestination = require("airtable").base(process.env.DESTINATION_BASE_ID);
+*************************************************************/
 
-const TABLE_TO_SYNC = "Fruits";
-const UNIQUE_FIELD_NAME = "Name";
-const AIRTABLE_AND_MOMENT_DATE_FORMAT = "ddd MMM D YYYY h:mm A ZZ";
+const MAX_RECORDS_PER_REQUEST = 10;
+const API_BASE_URL = "https://api.airtable.com/v0/";
 
-const lastRunInfoPath = path.join(
-  path.dirname(require.main.filename),
-  "lastRunInfo.json"
-);
-
-const loadLastRunDate = () => {
-  if (!fs.existsSync(lastRunInfoPath)) {
-    return null;
-  }
-  return moment(
-    JSON.parse(fs.readFileSync(lastRunInfoPath)).lastRunDate,
-    AIRTABLE_AND_MOMENT_DATE_FORMAT,
-    "utf8"
-  );
+const getSyncInfo = async () => {
+  const syncTable = base.getTable("SyncInfo");
+  const query = await syncTable.selectRecordsAsync();
+  const record = query.records[0];
+  const syncInfo = {
+    destinationApiKey: record.getCellValue("DestinationApiKey"),
+    destinationBaseId: record.getCellValue("DestinationBaseId"),
+    tablesToSync: record
+      .getCellValue("TablesToSync")
+      .split(",")
+      .filter((r) => r)
+      .map((r) => r.trim()),
+  };
+  return syncInfo;
 };
 
-const saveLastRunDate = () => {
-  fs.writeFileSync(
-    lastRunInfoPath,
-    JSON.stringify({
-      lastRunDate: moment().format(AIRTABLE_AND_MOMENT_DATE_FORMAT),
-    }),
-    "utf8"
-  );
-};
+const getRecord = async (apiKey, baseId, tableName, recordId) => {
+  let queryUrl = `${API_BASE_URL}${baseId}/${tableName}/${recordId}`;
 
-const getFieldOnAllRecords = (base, tableName, fieldName) => {
-  return new Promise((resolve, reject) => {
-    const fieldsAndIds = {};
-    try {
-      base(tableName)
-        .select({ fields: [fieldName] })
-        .eachPage(
-          (records, fetchNextPage) => {
-            records.forEach((record) => {
-              fieldsAndIds[record.get(fieldName)] = record.id;
-            });
-
-            fetchNextPage();
-          },
-          (err) => {
-            if (err) {
-              reject(err);
-            } else {
-              resolve(fieldsAndIds);
-            }
-          }
-        );
-    } catch (err) {
-      console.log(err);
-      process.exit(1);
-    }
+  const response = await fetch(queryUrl, {
+    headers: { Authorization: `Bearer ${apiKey}` },
   });
+  const json = await response.json();
+  if (json.error) {
+    throw new Error(JSON.stringify(json.error));
+  }
+  return json;
 };
 
-const syncTable = async (
-  bOrigin,
-  bDestination,
-  tableName,
-  lastPulled,
-  uniqueField
-) => {
-  const originFields = Object.keys(
-    await getFieldOnAllRecords(bOrigin, tableName, uniqueField)
-  );
-  const destinationFieldsAndIds = await getFieldOnAllRecords(
-    bDestination,
-    tableName,
-    uniqueField
-  );
-  const toAdd = originFields.filter((f) => !destinationFieldsAndIds[f]);
-  const toDelete = Object.keys(destinationFieldsAndIds).filter(
-    (f) => !originFields.includes(f)
-  );
-
-  const resultCounts = { updated: 0, deleted: 0, created: 0 };
-  if (toDelete.length > 0) {
-    const idsToDelete = [];
-    for (const d of toDelete) {
-      console.log(chalk.gray(` - deleting "${d}"`));
-      idsToDelete.push(destinationFieldsAndIds[d]);
+const getRecords = async (apiKey, baseId, tableName, fields, filterFormula) => {
+  const allRecords = [];
+  let offset;
+  do {
+    const params = {
+      pageSize: 100,
+      view: "Grid view",
+    };
+    if (filterFormula) {
+      params.filterByFormula = filterFormula;
     }
-    try {
-      await bDestination(tableName).destroy(idsToDelete);
-      resultCounts.deleted = resultCounts.deleted + idsToDelete.length;
-    } catch (err) {
-      console.log(err);
-      process.exit(1);
+    if (offset) {
+      params.offset = offset;
     }
-  }
-
-  const filterCriteria = lastPulled
-    ? {
-        filterByFormula:
-          "DATETIME_DIFF(LAST_MODIFIED_TIME(), " +
-          `DATETIME_PARSE('${lastPulled.format(
-            AIRTABLE_AND_MOMENT_DATE_FORMAT
-          )}', '${AIRTABLE_AND_MOMENT_DATE_FORMAT}'),` +
-          "'seconds') > 0",
+    let queryUrl = `${API_BASE_URL}${baseId}/${tableName}?`;
+    for (const k of Object.keys(params)) {
+      queryUrl = `${queryUrl}${k}=${encodeURIComponent(params[k])}&`;
+    }
+    if (fields) {
+      //NOTE: fields has an unusual param format
+      for (const f of fields) {
+        queryUrl = `${queryUrl}&${encodeURIComponent(
+          "fields[]"
+        )}=${encodeURIComponent(f)}&`;
       }
-    : {};
+    }
+    queryUrl = queryUrl.slice(0, queryUrl.length - 1);
 
-  return new Promise((resolve, reject) => {
-    bOrigin(tableName)
-      .select(filterCriteria)
-      .eachPage(
-        async (records, fetchNextPage) => {
-          for (const record of records) {
-            const recUniqField = record.get(uniqueField);
-            if (toAdd.includes(recUniqField)) {
-              console.log(chalk.gray(` - creating "${recUniqField}"`));
-              try {
-                await bDestination(tableName).create([
-                  { fields: record.fields },
-                ]);
-                resultCounts.created++;
-              } catch (err) {
-                console.log(err);
-                process.exit(1);
-              }
-            } else {
-              console.log(chalk.gray(` - Updating "${recUniqField}"`));
-              try {
-                await bDestination(tableName).update([
-                  {
-                    id: destinationFieldsAndIds[recUniqField],
-                    fields: record.fields,
-                  },
-                ]);
-                resultCounts.updated++;
-              } catch (err) {
-                console.log(err);
-                process.exit(1);
-              }
-            }
-          }
+    const response = await fetch(queryUrl, {
+      headers: { Authorization: `Bearer ${apiKey}` },
+    });
+    const json = await response.json();
+    if (json.error) {
+      throw new Error(JSON.stringify(json.error));
+    }
+    allRecords.push(...json.records);
+    offset = json.offset;
+  } while (offset);
 
-          fetchNextPage();
-        },
-        (err) => {
-          if (err) {
-            reject(err);
-            return;
-          } else {
-            resolve(resultCounts);
-          }
-        }
-      );
-  });
+  return allRecords;
 };
 
-(async () => {
-  console.log(`Synchronizing the "${TABLE_TO_SYNC}" table...`);
-  const resultCounts = await syncTable(
-    baseOrigin,
-    baseDestination,
-    TABLE_TO_SYNC,
-    loadLastRunDate(),
-    UNIQUE_FIELD_NAME
-  );
-  console.log();
-  if (
-    resultCounts.created + resultCounts.updated + resultCounts.deleted ===
-    0
-  ) {
-    console.log(chalk.blue(`(no changes since last run)`));
-  } else {
-    console.log(chalk.blue(`Results:`));
-    console.log(chalk.green(`  - created: ${resultCounts.created}`));
-    console.log(chalk.yellow(`  - updated: ${resultCounts.updated}`));
-    console.log(chalk.red(`  - deleted: ${resultCounts.deleted}`));
+const createRecords = async (apiKey, baseId, tableName, records) => {
+  // NOTE: airtable REST API for "create" method allows a max of 10 records per request
+  let remainingRecords = [...records];
+
+  while (remainingRecords.length > 0) {
+    const currentChunk = remainingRecords.slice(0, MAX_RECORDS_PER_REQUEST);
+    remainingRecords = remainingRecords.slice(MAX_RECORDS_PER_REQUEST);
+    const response = await fetch(`${API_BASE_URL}${baseId}/${tableName}?`, {
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        "Content-Type": "application/json",
+      },
+      method: "POST",
+      body: JSON.stringify({ records: currentChunk }),
+    });
+    const json = await response.json();
+    if (json.error) {
+      throw new Error(JSON.stringify(json.error));
+    }
+    return json;
   }
-  saveLastRunDate();
-})();
+};
+
+const updateRecords = async (apiKey, baseId, tableName, records) => {
+  // NOTE: airtable REST API for "update" method allows a max of 10 records per request
+  let remainingRecords = [...records];
+
+  while (remainingRecords.length > 0) {
+    const currentChunk = remainingRecords.slice(0, MAX_RECORDS_PER_REQUEST);
+    remainingRecords = remainingRecords.slice(MAX_RECORDS_PER_REQUEST);
+    const response = await fetch(`${API_BASE_URL}${baseId}/${tableName}?`, {
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        "Content-Type": "application/json",
+      },
+      method: "PATCH",
+      body: JSON.stringify({ records: currentChunk }),
+    });
+    const json = await response.json();
+    if (json.error) {
+      throw new Error(JSON.stringify(json.error));
+    }
+  }
+};
+
+const deleteRecords = async (apiKey, baseId, tableName, ids) => {
+  // NOTE: airtable REST API for "delete" method allows a max of 10 records per request
+  let remainingIds = [...ids];
+
+  while (remainingIds.length > 0) {
+    const currentChunkIds = remainingIds.slice(0, MAX_RECORDS_PER_REQUEST);
+    remainingIds = remainingIds.slice(MAX_RECORDS_PER_REQUEST);
+    let queryUrl = `${API_BASE_URL}${baseId}/${tableName}?`;
+    for (const id of currentChunkIds) {
+      queryUrl = `${queryUrl}&${encodeURIComponent("records[]")}=${id}&`;
+    }
+    queryUrl = queryUrl.slice(0, queryUrl.length - 1);
+    const response = await fetch(queryUrl, {
+      headers: { Authorization: `Bearer ${apiKey}` },
+      method: "DELETE",
+    });
+    const json = await response.json();
+    if (json.error) {
+      throw new Error(JSON.stringify(json.error));
+    }
+  }
+};
+
+const syncInfo = await getSyncInfo();
+const jobTimestamp = new Date().getTime();
+
+output.markdown(
+  `## Tables to synchronize: ${syncInfo.tablesToSync
+    .map((t) => "`" + t + "`")
+    .join(",")}`
+);
+for (const tableToSync of syncInfo.tablesToSync) {
+  output.markdown(`#### Synchronizing table "${tableToSync}"`);
+
+  const sourceTable = base.getTable(tableToSync);
+  const sourceFieldNames = sourceTable.fields.map((f) => f.name);
+  const sourceRecords = (await sourceTable.selectRecordsAsync()).records;
+  const sourceRecordIds = sourceRecords.map((sr) => sr.id);
+
+  /*
+       sourceDestinationIdMapping is an object in the format:
+  
+       { sourceRecordId: destinationRecordId, ... }
+      */
+  const destSourceIds = await getRecords(
+    syncInfo.destinationApiKey,
+    syncInfo.destinationBaseId,
+    tableToSync,
+    ["source_id"]
+  );
+  const sourceDestinationIdMapping = destSourceIds
+    .filter((r) => sourceRecordIds.includes(r.fields.source_id))
+    .reduce((acc, r) => {
+      acc[r.fields.source_id] = r.id;
+      return acc;
+    }, {});
+
+  const counts = { create: 0, update: 0, delete: 0 };
+
+  // for each source record, if there's a corresponding destination record, update it.  Otherwise, add it;
+  for (const sr of sourceRecords) {
+    if (sourceDestinationIdMapping[sr.id]) {
+      // it exists - update it;
+      counts.update++;
+      const destinationRecord = {};
+      for (const sfn of sourceFieldNames) {
+        destinationRecord[sfn] = await sr.getCellValue(sfn);
+      }
+      await updateRecords(
+        syncInfo.destinationApiKey,
+        syncInfo.destinationBaseId,
+        tableToSync,
+        [{ id: sourceDestinationIdMapping[sr.id], fields: destinationRecord }]
+      );
+    } else {
+      // it doesn't exist - add it;
+      counts.create++;
+      const destinationRecord = { source_id: sr.id };
+      for (const sfn of sourceFieldNames) {
+        destinationRecord[sfn] = await sr.getCellValue(sfn);
+      }
+      await createRecords(
+        syncInfo.destinationApiKey,
+        syncInfo.destinationBaseId,
+        tableToSync,
+        [{ fields: destinationRecord }]
+      );
+    }
+  }
+
+  const destinationIdsToDelete = destSourceIds
+    .filter((r) => !sourceRecordIds.includes(r.fields.source_id))
+    .map((r) => r.id);
+  for (const id of destinationIdsToDelete) {
+    await deleteRecords(
+      syncInfo.destinationApiKey,
+      syncInfo.destinationBaseId,
+      tableToSync,
+      [id]
+    );
+    counts.delete++;
+  }
+
+  output.markdown(`* created: ${counts.create}`);
+  output.markdown(`* updated: ${counts.update}`);
+  output.markdown(`* deleted: ${counts.delete}`);
+}
