@@ -90,8 +90,14 @@ const getRecords = async (
   return allRecords;
 };
 
-const createRecords = async (apiKey, baseId, tableName, records) => {
-  // NOTE: airtable REST API for "create" method allows a max of 10 records per request
+const makeApiRequest = async (
+  apiKey,
+  baseId,
+  tableName,
+  records,
+  httpMethod
+) => {
+  // NOTE: airtable REST API for create & update methods allows a max of 10 records per request
   let remainingRecords = [...records];
 
   while (remainingRecords.length > 0) {
@@ -102,37 +108,22 @@ const createRecords = async (apiKey, baseId, tableName, records) => {
         Authorization: `Bearer ${apiKey}`,
         "Content-Type": "application/json",
       },
-      method: "POST",
+      method: httpMethod,
       body: JSON.stringify({ records: currentChunk }),
     });
     const json = await response.json();
     if (json.error) {
       throw new Error(JSON.stringify(json.error));
     }
-    return json;
   }
 };
 
-const updateRecords = async (apiKey, baseId, tableName, records) => {
-  // NOTE: airtable REST API for "update" method allows a max of 10 records per request
-  let remainingRecords = [...records];
+const createRecords = async (apiKey, baseId, tableName, records) => {
+  await makeApiRequest(apiKey, baseId, tableName, records, "POST");
+};
 
-  while (remainingRecords.length > 0) {
-    const currentChunk = remainingRecords.slice(0, MAX_RECORDS_PER_REQUEST);
-    remainingRecords = remainingRecords.slice(MAX_RECORDS_PER_REQUEST);
-    const response = await fetch(`${API_BASE_URL}${baseId}/${tableName}?`, {
-      headers: {
-        Authorization: `Bearer ${apiKey}`,
-        "Content-Type": "application/json",
-      },
-      method: "PATCH",
-      body: JSON.stringify({ records: currentChunk }),
-    });
-    const json = await response.json();
-    if (json.error) {
-      throw new Error(JSON.stringify(json.error));
-    }
-  }
+const updateRecords = async (apiKey, baseId, tableName, records) => {
+  await makeApiRequest(apiKey, baseId, tableName, records, "PATCH");
 };
 
 const deleteRecords = async (apiKey, baseId, tableName, ids) => {
@@ -172,10 +163,10 @@ const isAttachment = (obj) => {
 
 const getIdMapping = async (tableName) => {
   /*
-          sourceDestinationIdMapping is an object in the format:
+    sourceDestinationIdMapping is an object in the format:
           
-          { sourceRecordId: destinationRecordId, ... }
-        */
+    { sourceRecordId: destinationRecordId, ... }
+  */
   const sourceRecordIds = (
     await base.getTable(tableName).selectRecordsAsync()
   ).records.map((sr) => sr.id);
