@@ -278,31 +278,6 @@ for (const tableToSync of syncInfo.tablesToSync) {
         idMappingByTable,
         commonFieldNames
       );
-
-      for (const sfn of commonFieldNames) {
-        destinationRecord[sfn] = await sr.getCellValue(sfn);
-        if (isAttachment(destinationRecord[sfn])) {
-          //NOTE: Jake only wants to bring across the first attachment
-          destinationRecord[sfn] = [
-            {
-              url: destinationRecord[sfn][0].url,
-              fileName: destinationRecord[sfn][0].fileName,
-            },
-          ];
-        }
-        const link = syncInfo.destinationSchema[tableToSync].filter(
-          (f) => f.name === sfn
-        )[0].link;
-        if (link) {
-          // it's a linked field
-          const linkIdMapping = idMappingByTable[link.table].idMapping;
-          if (destinationRecord[sfn]) {
-            destinationRecord[sfn] = destinationRecord[sfn]
-              .filter((r) => linkIdMapping[r.id])
-              .map((r) => linkIdMapping[r.id]);
-          }
-        }
-      }
       await updateRecords(
         syncInfo.destinationApiKey,
         syncInfo.destinationBaseId,
@@ -319,30 +294,6 @@ for (const tableToSync of syncInfo.tablesToSync) {
         idMappingByTable,
         commonFieldNames
       );
-      for (const sfn of commonFieldNames) {
-        destinationRecord[sfn] = await sr.getCellValue(sfn);
-        if (isAttachment(destinationRecord[sfn])) {
-          //NOTE: Jake only wants to bring across the first attachment
-          destinationRecord[sfn] = [
-            {
-              url: destinationRecord[sfn][0].url,
-              fileName: destinationRecord[sfn][0].fileName,
-            },
-          ];
-        }
-        const link = syncInfo.destinationSchema[tableToSync].filter(
-          (f) => f.name === sfn
-        )[0].link;
-        if (link) {
-          // it's a linked field
-          const linkIdMapping = idMappingByTable[link.table].idMapping;
-          if (destinationRecord[sfn]) {
-            destinationRecord[sfn] = destinationRecord[sfn]
-              .filter((r) => linkIdMapping[r.id])
-              .map((r) => linkIdMapping[r.id]);
-          }
-        }
-      }
       await createRecords(
         syncInfo.destinationApiKey,
         syncInfo.destinationBaseId,
