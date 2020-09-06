@@ -125,29 +125,6 @@ const updateRecords = async (apiKey, baseId, tableName, records) => {
   await makeApiRequest(apiKey, baseId, tableName, records, "PATCH");
 };
 
-const deleteRecords = async (apiKey, baseId, tableName, ids) => {
-  // NOTE: airtable REST API for "delete" method allows a max of 10 records per request
-  let remainingIds = [...ids];
-
-  while (remainingIds.length > 0) {
-    const currentChunkIds = remainingIds.slice(0, MAX_RECORDS_PER_REQUEST);
-    remainingIds = remainingIds.slice(MAX_RECORDS_PER_REQUEST);
-    let queryUrl = `${API_BASE_URL}${baseId}/${tableName}?`;
-    for (const id of currentChunkIds) {
-      queryUrl = `${queryUrl}&${encodeURIComponent("records[]")}=${id}&`;
-    }
-    queryUrl = queryUrl.slice(0, queryUrl.length - 1);
-    const response = await fetch(queryUrl, {
-      headers: { Authorization: `Bearer ${apiKey}` },
-      method: "DELETE",
-    });
-    const json = await response.json();
-    if (json.error) {
-      throw new Error(JSON.stringify(json.error));
-    }
-  }
-};
-
 const getIdMapping = async (tableName) => {
   const sourceRecordIds = (
     await base.getTable(tableName).selectRecordsAsync()
@@ -301,14 +278,12 @@ for (const tableToSync of tablesToSync) {
     destinationFieldNames.includes(sfn)
   );
   const { idMapping } = idMappingByTable[tableToSync];
-  const counts = { create: 0, update: 0, delete: 0 };
   for (const sourceRecordId of linkedFieldTrail[tableToSync]) {
     const sr = (await sourceTable.selectRecordsAsync()).getRecord(
       sourceRecordId
     );
     if (idMapping[sr.id]) {
       // it exists - update it;
-      counts.update++;
       const destinationRecord = await getDestinationRecord(
         sr,
         tableToSync,
@@ -326,7 +301,6 @@ for (const tableToSync of tablesToSync) {
       );
     } else {
       // it doesn't exist - add it;
-      counts.create++;
       const destinationRecord = await getDestinationRecord(
         sr,
         tableToSync,
