@@ -18,7 +18,7 @@ const getSyncInfo = async () => {
   const syncInfo = {
     destinationApiKey: record.getCellValue("DestinationApiKey"),
     destinationBaseId: record.getCellValue("DestinationBaseId"),
-    destinationSchema: destinationSchema,
+    destinationSchema,
     tablesToSync: Object.keys(destinationSchema),
   };
   return syncInfo;
@@ -271,9 +271,7 @@ for (const tableToSync of tablesToSync) {
     .filter((f) => f.type === "multipleAttachments")
     .map((f) => f.name);
   const sourceFieldNames = sourceTable.fields.map((f) => f.name);
-  const destinationFieldNames = syncInfo.destinationSchema[tableToSync].map(
-    (f) => f.name
-  );
+  const destinationFieldNames = syncInfo.destinationSchema[tableToSync];
   const commonFieldNames = sourceFieldNames.filter((sfn) =>
     destinationFieldNames.includes(sfn)
   );

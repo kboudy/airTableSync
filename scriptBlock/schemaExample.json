@@ -1,24 +1,4 @@
 {
-  "Fruits": [
-    {
-      "name": "Name"
-    },
-    {
-      "name": "Color"
-    },
-    {
-      "name": "Images"
-    },
-    {
-      "name": "Vendor"
-    }
-  ],
-  "Vendor": [
-    {
-      "name": "Name"
-    },
-    {
-      "name": "Fruits"
-    }
-  ]
+  "Fruits": ["Name", "Color", "Images", "Vendor"],
+  "Vendor": ["Name", "Fruits"]
 }
