@@ -178,17 +178,6 @@ const getDestinationRecord = async (
 ) => {
   const destinationRecord = {};
   for (const sfn of commonFieldNames) {
-    /*     const isAttachment = (obj) => {
-      return (
-        obj &&
-        Array.isArray(obj) &&
-        obj.length > 0 &&
-        obj[0].id &&
-        obj[0].url &&
-        obj[0].filename &&
-        obj[0].size
-      );
-    }; */
     destinationRecord[sfn] = await sourceRecord.getCellValue(sfn);
     const isAttachment =
       destinationRecord[sfn].length > 0 && attachmentFieldNames.includes(sfn);
