@@ -10,11 +10,7 @@
       "name": "Images"
     },
     {
-      "name": "Vendor",
-      "link": {
-        "table": "Vendor",
-        "field": "Fruits"
-      }
+      "name": "Vendor"
     }
   ],
   "Vendor": [
@@ -22,11 +18,7 @@
       "name": "Name"
     },
     {
-      "name": "Fruits",
-      "link": {
-        "table": "Fruits",
-        "field": "Vendor"
-      }
+      "name": "Fruits"
     }
   ]
 }

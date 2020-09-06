@@ -12,15 +12,14 @@ const getSyncInfo = async () => {
   const syncTable = base.getTable("SyncInfo");
   const query = await syncTable.selectRecordsAsync();
   const record = query.records[0];
+  const destinationSchema = JSON.parse(
+    record.getCellValue("DestinationSchema")
+  );
   const syncInfo = {
     destinationApiKey: record.getCellValue("DestinationApiKey"),
     destinationBaseId: record.getCellValue("DestinationBaseId"),
-    destinationSchema: JSON.parse(record.getCellValue("DestinationSchema")),
-    tablesToSync: record
-      .getCellValue("TablesToSync")
-      .split(",")
-      .filter((r) => r)
-      .map((r) => r.trim()),
+    destinationSchema: destinationSchema,
+    tablesToSync: Object.keys(destinationSchema),
   };
   return syncInfo;
 };
@@ -149,19 +148,12 @@ const deleteRecords = async (apiKey, baseId, tableName, ids) => {
   }
 };
 
-const isAttachment = (obj) => {
-  return (
-    obj &&
-    Array.isArray(obj) &&
-    obj.length > 0 &&
-    obj[0].id &&
-    obj[0].url &&
-    obj[0].filename &&
-    obj[0].size
-  );
-};
-
 const getIdMapping = async (tableName) => {
+  /*
+            sourceDestinationIdMapping is an object in the format:
+            
+            { sourceRecordId: destinationRecordId, ... }
+          */
   const sourceRecordIds = (
     await base.getTable(tableName).selectRecordsAsync()
   ).records.map((sr) => sr.id);
@@ -184,13 +176,28 @@ const getDestinationRecord = async (
   sourceRecord,
   table,
   syncInfo,
+  linkedFields,
+  attachmentFieldNames,
   idMappingByTable,
   commonFieldNames
 ) => {
   const destinationRecord = {};
   for (const sfn of commonFieldNames) {
+    /*     const isAttachment = (obj) => {
+      return (
+        obj &&
+        Array.isArray(obj) &&
+        obj.length > 0 &&
+        obj[0].id &&
+        obj[0].url &&
+        obj[0].filename &&
+        obj[0].size
+      );
+    }; */
     destinationRecord[sfn] = await sourceRecord.getCellValue(sfn);
-    if (isAttachment(destinationRecord[sfn])) {
+    const isAttachment =
+      destinationRecord[sfn].length > 0 && attachmentFieldNames.includes(sfn);
+    if (isAttachment) {
       //NOTE: Jake only wants to bring across the first attachment
       destinationRecord[sfn] = [
         {
@@ -199,9 +206,9 @@ const getDestinationRecord = async (
         },
       ];
     }
-    const { link } = syncInfo.destinationSchema[table].filter(
-      (f) => f.name === sfn
-    )[0];
+
+    const link = linkedFields[sfn];
+
     if (link) {
       // it's a linked field
       const linkIdMapping = idMappingByTable[link.table].idMapping;
@@ -236,6 +243,24 @@ for (const tableToSync of syncInfo.tablesToSync) {
   output.markdown(`#### Synchronizing table "${tableToSync}"`);
 
   const sourceTable = base.getTable(tableToSync);
+  const linkedFields = sourceTable.fields
+    .filter((f) => f.type === "multipleRecordLinks")
+    .reduce((acc, f) => {
+      const linkedTable = base.getTable(f.options.linkedTableId);
+      const linkedField = linkedTable.fields.filter(
+        (ltf) => ltf.id === f.options.inverseLinkFieldId
+      )[0];
+
+      acc[f.name] = {
+        table: linkedTable.name,
+        field: linkedField.name,
+      };
+      return acc;
+    }, {});
+
+  const attachmentFieldNames = sourceTable.fields
+    .filter((f) => f.type === "multipleAttachments")
+    .map((f) => f.name);
   const sourceFieldNames = sourceTable.fields.map((f) => f.name);
   const destinationFieldNames = syncInfo.destinationSchema[tableToSync].map(
     (f) => f.name
@@ -261,6 +286,8 @@ for (const tableToSync of syncInfo.tablesToSync) {
         sr,
         tableToSync,
         syncInfo,
+        linkedFields,
+        attachmentFieldNames,
         idMappingByTable,
         commonFieldNames
       );
@@ -277,6 +304,8 @@ for (const tableToSync of syncInfo.tablesToSync) {
         sr,
         tableToSync,
         syncInfo,
+        linkedFields,
+        attachmentFieldNames,
         idMappingByTable,
         commonFieldNames
       );
