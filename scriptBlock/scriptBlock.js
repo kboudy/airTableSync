@@ -149,11 +149,6 @@ const deleteRecords = async (apiKey, baseId, tableName, ids) => {
 };
 
 const getIdMapping = async (tableName) => {
-  /*
-            sourceDestinationIdMapping is an object in the format:
-            
-            { sourceRecordId: destinationRecordId, ... }
-          */
   const sourceRecordIds = (
     await base.getTable(tableName).selectRecordsAsync()
   ).records.map((sr) => sr.id);
