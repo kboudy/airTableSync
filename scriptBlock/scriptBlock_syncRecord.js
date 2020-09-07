@@ -270,7 +270,9 @@ for (const tableToSync of tablesToSync) {
   const attachmentFieldNames = sourceTable.fields
     .filter((f) => f.type === "multipleAttachments")
     .map((f) => f.name);
-  const sourceFieldNames = sourceTable.fields.map((f) => f.name);
+  const sourceFieldNames = sourceTable.fields
+    .filter((f) => f.type !== "button")
+    .map((f) => f.name);
   const destinationFieldNames = syncInfo.destinationSchema[tableToSync];
   const commonFieldNames = sourceFieldNames.filter((sfn) =>
     destinationFieldNames.includes(sfn)
