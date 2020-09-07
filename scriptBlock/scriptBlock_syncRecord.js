@@ -144,10 +144,8 @@ const getIdMapping = async (tableName) => {
   return { allSourceIdsInDestination, idMapping };
 };
 
-const getDestinationRecord = async (
+const convertToDestinationRecord = async (
   sourceRecord,
-  table,
-  syncInfo,
   linkedFields,
   attachmentFieldNames,
   idMappingByTable,
@@ -284,10 +282,8 @@ for (const tableToSync of tablesToSync) {
     );
     if (idMapping[sr.id]) {
       // it exists - update it;
-      const destinationRecord = await getDestinationRecord(
+      const destinationRecord = await convertToDestinationRecord(
         sr,
-        tableToSync,
-        syncInfo,
         linkedFields,
         attachmentFieldNames,
         idMappingByTable,
@@ -301,10 +297,8 @@ for (const tableToSync of tablesToSync) {
       );
     } else {
       // it doesn't exist - add it;
-      const destinationRecord = await getDestinationRecord(
+      const destinationRecord = await convertToDestinationRecord(
         sr,
-        tableToSync,
-        syncInfo,
         linkedFields,
         attachmentFieldNames,
         idMappingByTable,
