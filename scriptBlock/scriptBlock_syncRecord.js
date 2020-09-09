@@ -8,7 +8,9 @@ const MAX_RECORDS_PER_REQUEST = 10;
 const API_BASE_URL = "https://api.airtable.com/v0/";
 const SOURCE_ID = "SourceId";
 const VERBOSE_LOGGING = true;
-const SYNCHRONIZE_LINKED_RECORDS = true;
+
+// how many consecutive linked field "hops" to take (0 = *just* the clicked record)
+const SYNCHRONIZE_LINKED_RECORD_DEPTH = 10;
 
 const getSyncInfo = async () => {
   const syncTable = base.getTable("SyncInfo");
@@ -207,7 +209,8 @@ const recurseLinkedFields = async (
   syncInfo,
   table,
   record,
-  linkedFieldTrail = []
+  linkedFieldTrail = [],
+  currentDepth = 1
 ) => {
   const allLinkedFields = table.fields
     .filter((f) => f.type === "multipleRecordLinks")
@@ -256,12 +259,16 @@ const recurseLinkedFields = async (
           const linkedRecord = (
             await linkedTable.selectRecordsAsync()
           ).getRecord(linkedFieldRecord.id);
-          linkedFieldTrail = await recurseLinkedFields(
-            syncInfo,
-            linkedTable,
-            linkedRecord,
-            linkedFieldTrail
-          );
+          const nextDepth = currentDepth + 1;
+          if (nextDepth <= SYNCHRONIZE_LINKED_RECORD_DEPTH) {
+            linkedFieldTrail = await recurseLinkedFields(
+              syncInfo,
+              linkedTable,
+              linkedRecord,
+              linkedFieldTrail,
+              nextDepth
+            );
+          }
         }
       }
     }
@@ -295,7 +302,7 @@ for (const table of tablesToSync) {
 
 // to prepare, we'll gather all the records that need to be synced, by following a linked-field trail
 let linkedFieldTrail = [];
-if (SYNCHRONIZE_LINKED_RECORDS) {
+if (SYNCHRONIZE_LINKED_RECORD_DEPTH > 0) {
   linkedFieldTrail = await recurseLinkedFields(
     syncInfo,
     activeTable,
