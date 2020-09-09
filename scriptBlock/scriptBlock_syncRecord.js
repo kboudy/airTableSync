@@ -8,6 +8,7 @@ const MAX_RECORDS_PER_REQUEST = 10;
 const API_BASE_URL = "https://api.airtable.com/v0/";
 const SOURCE_ID = "SourceId";
 const VERBOSE_LOGGING = true;
+const SYNCHRONIZE_LINKED_RECORDS = true;
 
 const getSyncInfo = async () => {
   const syncTable = base.getTable("SyncInfo");
@@ -293,11 +294,14 @@ for (const table of tablesToSync) {
 }
 
 // to prepare, we'll gather all the records that need to be synced, by following a linked-field trail
-let linkedFieldTrail = await recurseLinkedFields(
-  syncInfo,
-  activeTable,
-  activeRecord
-);
+let linkedFieldTrail = [];
+if (SYNCHRONIZE_LINKED_RECORDS) {
+  linkedFieldTrail = await recurseLinkedFields(
+    syncInfo,
+    activeTable,
+    activeRecord
+  );
+}
 
 // insert the original record as the first to update
 // (first eliminate it in the trail if it already exists)
