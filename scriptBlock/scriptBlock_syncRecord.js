@@ -7,6 +7,7 @@ NOTE: This is designed to live in a script block, on airTable
 const MAX_RECORDS_PER_REQUEST = 10;
 const API_BASE_URL = "https://api.airtable.com/v0/";
 const SOURCE_ID = "SourceId";
+const VERBOSE_LOGGING = true;
 
 const getSyncInfo = async () => {
   const syncTable = base.getTable("SyncInfo");
@@ -193,8 +194,21 @@ const convertToDestinationRecord = async (
   return destinationRecord;
 };
 
-const recurseLinkedFields = async (table, record, linkedFieldTrail = {}) => {
-  const linkedFields = table.fields
+// for logging - get a friendly name for the company or contact
+const getObjName = (obj) => {
+  if (obj["First Name"]) {
+    return `${obj["First Name"]} ${obj["Last Name"]}`;
+  }
+  return obj.Name;
+};
+
+const recurseLinkedFields = async (
+  syncInfo,
+  table,
+  record,
+  linkedFieldTrail = []
+) => {
+  const allLinkedFields = table.fields
     .filter((f) => f.type === "multipleRecordLinks")
     .reduce((acc, f) => {
       const linkedTable = base.getTable(f.options.linkedTableId);
@@ -208,30 +222,56 @@ const recurseLinkedFields = async (table, record, linkedFieldTrail = {}) => {
       };
       return acc;
     }, {});
-  for (const linkedTableName in linkedFields) {
-    if (!linkedFieldTrail[linkedTableName]) {
-      linkedFieldTrail[linkedTableName] = [];
+  const relevantLinkedFields = {};
+  for (const key in allLinkedFields) {
+    const o = allLinkedFields[key];
+    if (
+      syncInfo.tablesToSync.includes(o.table) &&
+      syncInfo.destinationSchema[o.table].includes(o.field)
+    ) {
+      relevantLinkedFields[key] = o;
     }
-    for (const linkedFieldRecord of record.getCellValue(linkedTableName)) {
-      if (
-        linkedFieldTrail[linkedTableName].filter(
-          (rId) => rId === linkedFieldRecord.id
-        ).length === 0
-      ) {
-        linkedFieldTrail[linkedTableName].push(linkedFieldRecord.id);
-        const linkedTable = base.getTable(linkedTableName);
-        const linkedRecord = (await linkedTable.selectRecordsAsync()).getRecord(
-          linkedFieldRecord.id
-        );
-        linkedFieldTrail = await recurseLinkedFields(
-          linkedTable,
-          linkedRecord,
-          linkedFieldTrail
-        );
+  }
+  for (const fieldName in relevantLinkedFields) {
+    const linkedFieldRecords = await record.getCellValue(fieldName);
+    if (linkedFieldRecords) {
+      for (const linkedFieldRecord of linkedFieldRecords) {
+        if (
+          linkedFieldTrail.filter(
+            (lf) => lf.linkedRecordId === linkedFieldRecord.id
+          ).length === 0
+        ) {
+          const linkedTable = base.getTable(
+            relevantLinkedFields[fieldName].table
+          );
+          linkedFieldTrail.push({
+            originTable: table.name,
+            originRecordName: record.name,
+            originFieldName: fieldName,
+            linkedTable: linkedTable.name,
+            linkedRecordName: linkedFieldRecord.name,
+            linkedRecordId: linkedFieldRecord.id,
+          });
+          const linkedRecord = (
+            await linkedTable.selectRecordsAsync()
+          ).getRecord(linkedFieldRecord.id);
+          linkedFieldTrail = await recurseLinkedFields(
+            syncInfo,
+            linkedTable,
+            linkedRecord,
+            linkedFieldTrail
+          );
+        }
       }
     }
   }
   return linkedFieldTrail;
+};
+
+const log = (msg) => {
+  if (VERBOSE_LOGGING) {
+    output.markdown(msg);
+  }
 };
 
 //-------------------------------------------------------------------------------------------
@@ -253,14 +293,32 @@ for (const table of tablesToSync) {
 }
 
 // to prepare, we'll gather all the records that need to be synced, by following a linked-field trail
-const linkedFieldTrail = await recurseLinkedFields(activeTable, activeRecord);
+let linkedFieldTrail = await recurseLinkedFields(
+  syncInfo,
+  activeTable,
+  activeRecord
+);
 
-// we'll need to circle back to the original table to catch any newly-created linked fields
-tablesToSync.push(activeTable.name);
-for (const tableToSync of tablesToSync) {
-  if (!linkedFieldTrail[tableToSync]) {
-    continue;
+// insert the original record as the first to update
+// (first eliminate it in the trail if it already exists)
+linkedFieldTrail = linkedFieldTrail.filter(
+  (lf) => lf.linkedRecordId !== activeRecord.id
+);
+linkedFieldTrail = [
+  { linkedTable: activeTable.name, linkedRecordId: activeRecord.id },
+  ...linkedFieldTrail,
+];
+
+const tic = "`";
+for (const lf of linkedFieldTrail) {
+  if (lf.originTable) {
+    log(
+      `* ${lf.originTable}[["${lf.originRecordName}"]].${lf.originFieldName} → ${tic}${lf.linkedTable}["${lf.linkedRecordName}"]${tic}`
+    );
+  } else {
+    log(`## ${activeTable.name}[["${activeRecord.name}"]]`);
   }
+  const tableToSync = lf.linkedTable;
   const sourceTable = base.getTable(tableToSync);
   const linkedFields = sourceTable.fields
     .filter((f) => f.type === "multipleRecordLinks")
@@ -290,44 +348,44 @@ for (const tableToSync of tablesToSync) {
     destinationFieldNames.includes(sfn)
   );
   const { idMapping } = idMappingByTable[tableToSync];
-  for (const sourceRecordId of linkedFieldTrail[tableToSync]) {
-    const sr = (await sourceTable.selectRecordsAsync()).getRecord(
-      sourceRecordId
+
+  const sr = (await sourceTable.selectRecordsAsync()).getRecord(
+    lf.linkedRecordId
+  );
+  if (idMapping[sr.id]) {
+    // it exists - update it;
+    const destinationRecord = await convertToDestinationRecord(
+      sr,
+      linkedFields,
+      attachmentFieldNames,
+      selectFieldNames,
+      idMappingByTable,
+      commonFieldNames
     );
-    if (idMapping[sr.id]) {
-      // it exists - update it;
-      const destinationRecord = await convertToDestinationRecord(
-        sr,
-        linkedFields,
-        attachmentFieldNames,
-        selectFieldNames,
-        idMappingByTable,
-        commonFieldNames
-      );
-      await updateRecords(
-        syncInfo.destinationApiKey,
-        syncInfo.destinationBaseId,
-        tableToSync,
-        [{ id: idMapping[sr.id], fields: destinationRecord }]
-      );
-    } else {
-      // it doesn't exist - add it;
-      const destinationRecord = await convertToDestinationRecord(
-        sr,
-        linkedFields,
-        attachmentFieldNames,
-        selectFieldNames,
-        idMappingByTable,
-        commonFieldNames
-      );
-      await createRecords(
-        syncInfo.destinationApiKey,
-        syncInfo.destinationBaseId,
-        tableToSync,
-        [{ fields: destinationRecord }]
-      );
-    }
+    await updateRecords(
+      syncInfo.destinationApiKey,
+      syncInfo.destinationBaseId,
+      tableToSync,
+      [{ id: idMapping[sr.id], fields: destinationRecord }]
+    );
+  } else {
+    // it doesn't exist - add it;
+    const destinationRecord = await convertToDestinationRecord(
+      sr,
+      linkedFields,
+      attachmentFieldNames,
+      selectFieldNames,
+      idMappingByTable,
+      commonFieldNames
+    );
+    await createRecords(
+      syncInfo.destinationApiKey,
+      syncInfo.destinationBaseId,
+      tableToSync,
+      [{ fields: destinationRecord }]
+    );
   }
+
   // update the id mapping for this table (so any linked fields in subsequent tables get the new ids)
   idMappingByTable[tableToSync] = await getIdMapping(tableToSync);
 }
