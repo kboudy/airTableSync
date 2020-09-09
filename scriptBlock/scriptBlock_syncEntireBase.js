@@ -271,6 +271,10 @@ for (const tableToSync of syncInfo.tablesToSync) {
 
   const counts = { create: 0, update: 0, delete: 0 };
 
+  const recordsToCreate = [];
+  const recordsToUpdate = [];
+  const recordsToDelete = [];
+
   // for each source record, if there's a corresponding destination record, update it.  Otherwise, add it;
   for (const sr of sourceRecords) {
     if (idMapping[sr.id]) {
@@ -284,12 +288,7 @@ for (const tableToSync of syncInfo.tablesToSync) {
         idMappingByTable,
         commonFieldNames
       );
-      await updateRecords(
-        syncInfo.destinationApiKey,
-        syncInfo.destinationBaseId,
-        tableToSync,
-        [{ id: idMapping[sr.id], fields: destinationRecord }]
-      );
+      recordsToUpdate.push({ id: idMapping[sr.id], fields: destinationRecord });
     } else {
       // it doesn't exist - add it;
       counts.create++;
@@ -301,12 +300,7 @@ for (const tableToSync of syncInfo.tablesToSync) {
         idMappingByTable,
         commonFieldNames
       );
-      await createRecords(
-        syncInfo.destinationApiKey,
-        syncInfo.destinationBaseId,
-        tableToSync,
-        [{ fields: destinationRecord }]
-      );
+      recordsToCreate.push({ id: idMapping[sr.id], fields: destinationRecord });
     }
   }
 
@@ -314,13 +308,35 @@ for (const tableToSync of syncInfo.tablesToSync) {
     .filter((r) => !sourceRecordIds.includes(r.fields[SOURCE_ID]))
     .map((r) => r.id);
   for (const id of destinationIdsToDelete) {
+    recordsToDelete.push(id);
+    counts.delete++;
+  }
+
+  if (recordsToUpdate.length > 0) {
+    await updateRecords(
+      syncInfo.destinationApiKey,
+      syncInfo.destinationBaseId,
+      tableToSync,
+      recordsToUpdate
+    );
+  }
+
+  if (recordsToCreate.length > 0) {
+    await createRecords(
+      syncInfo.destinationApiKey,
+      syncInfo.destinationBaseId,
+      tableToSync,
+      recordsToCreate
+    );
+  }
+
+  if (recordsToDelete.length > 0) {
     await deleteRecords(
       syncInfo.destinationApiKey,
       syncInfo.destinationBaseId,
       tableToSync,
-      [id]
+      recordsToDelete
     );
-    counts.delete++;
   }
 
   // update the id mapping for this table (so any linked fields in subsequent tables get the new ids)
