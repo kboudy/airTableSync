@@ -50,7 +50,6 @@ const getRecords = async (
   do {
     const params = {
       pageSize: 100,
-      view: "Grid view",
     };
     if (filterFormula) {
       params.filterByFormula = filterFormula;
@@ -155,7 +154,9 @@ const convertToDestinationRecord = async (
   for (const sfn of commonFieldNames) {
     destinationRecord[sfn] = await sourceRecord.getCellValue(sfn);
     const isAttachment =
-      destinationRecord[sfn].length > 0 && attachmentFieldNames.includes(sfn);
+      destinationRecord[sfn] &&
+      destinationRecord[sfn].length > 0 &&
+      attachmentFieldNames.includes(sfn);
     if (isAttachment) {
       //NOTE: Jake only wants to bring across the first attachment
       destinationRecord[sfn] = [
