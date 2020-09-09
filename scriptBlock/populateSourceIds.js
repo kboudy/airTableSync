@@ -94,7 +94,7 @@ const makeApiRequest = async (
         "Content-Type": "application/json",
       },
       method: httpMethod,
-      body: JSON.stringify({ records: currentChunk }),
+      body: JSON.stringify({ records: currentChunk, typecast: true }),
     });
     const json = await response.json();
     if (json.error) {

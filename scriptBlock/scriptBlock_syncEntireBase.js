@@ -107,7 +107,7 @@ const makeApiRequest = async (
         "Content-Type": "application/json",
       },
       method: httpMethod,
-      body: JSON.stringify({ records: currentChunk }),
+      body: JSON.stringify({ records: currentChunk, typecast: true }),
     });
     const json = await response.json();
     if (json.error) {
@@ -170,6 +170,7 @@ const convertToDestinationRecord = async (
   sourceRecord,
   linkedFields,
   attachmentFieldNames,
+  selectFieldNames,
   idMappingByTable,
   commonFieldNames
 ) => {
@@ -188,6 +189,15 @@ const convertToDestinationRecord = async (
           fileName: destinationRecord[sfn][0].fileName,
         },
       ];
+    }
+
+    const isSelect = destinationRecord[sfn] && selectFieldNames.includes(sfn);
+    if (isSelect) {
+      if (Array.isArray(destinationRecord[sfn])) {
+        destinationRecord[sfn] = destinationRecord[sfn].map((r) => r.name);
+      } else {
+        destinationRecord[sfn] = destinationRecord[sfn].name;
+      }
     }
 
     const link = linkedFields[sfn];
@@ -244,6 +254,9 @@ for (const tableToSync of syncInfo.tablesToSync) {
   const attachmentFieldNames = sourceTable.fields
     .filter((f) => f.type === "multipleAttachments")
     .map((f) => f.name);
+  const selectFieldNames = sourceTable.fields
+    .filter((f) => f.type === "singleSelect" || f.type === "multipleSelects")
+    .map((f) => f.name);
   const sourceFieldNames = sourceTable.fields.map((f) => f.name);
   const destinationFieldNames = syncInfo.destinationSchema[tableToSync];
   const commonFieldNames = sourceFieldNames.filter((sfn) =>
@@ -267,6 +280,7 @@ for (const tableToSync of syncInfo.tablesToSync) {
         sr,
         linkedFields,
         attachmentFieldNames,
+        selectFieldNames,
         idMappingByTable,
         commonFieldNames
       );
@@ -283,6 +297,7 @@ for (const tableToSync of syncInfo.tablesToSync) {
         sr,
         linkedFields,
         attachmentFieldNames,
+        selectFieldNames,
         idMappingByTable,
         commonFieldNames
       );
