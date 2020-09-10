@@ -1,4 +1,39 @@
 {
-  "Fruits": ["Name", "Color", "Images", "Vendor"],
-  "Vendor": ["Name", "Fruits"]
+  "Companies": [
+    "Business Summary",
+    "Company Type",
+    "Contacts",
+    "Country",
+    "Description",
+    "Geocode Cache",
+    "Industries",
+    "Investment Class",
+    "Is Active",
+    "LinkedIn URL",
+    "Location",
+    "Logo",
+    "Name",
+    "Show On Website",
+    "Tech Executive",
+    "Tech Stack",
+    "Website"
+  ],
+  "Contacts": [
+    "Bio",
+    "Company Tech Executive",
+    "Company",
+    "Email Address",
+    "First Name",
+    "Goes by",
+    "Last Name",
+    "LinkedIn Profile",
+    "Location",
+    "Mobile Phone",
+    "Picture",
+    "Still Employed",
+    "Tech Leadership Exec",
+    "Tech Leadership Group Member",
+    "Title",
+    "Work Phone"
+  ]
 }
