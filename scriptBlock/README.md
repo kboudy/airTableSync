@@ -4,7 +4,7 @@
 
 ## Setup
 
-- Prequisites:
+- Prerequisites:
 
   - Have a source & destination base (can be on separate accounts)
     - take note of the destination base's id, which can be found [here](https://airtable.com/api)
