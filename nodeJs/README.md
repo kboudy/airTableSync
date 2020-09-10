@@ -1,4 +1,4 @@
-# AirTableSync
+# AirTableSync: NodeJs solution
 
 Proof of concept for one-way sync for a table in 2 different bases
 
