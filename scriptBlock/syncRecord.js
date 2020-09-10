@@ -4,28 +4,40 @@ NOTE: This is designed to live in a script block, on airTable
 
 *************************************************************/
 
+// how many consecutive linked field "hops" to take (0 = *just* the clicked record)
+const SYNCHRONIZE_LINKED_RECORD_DEPTH = 10;
+const VERBOSE_LOGGING = true;
+
 const MAX_RECORDS_PER_REQUEST = 10;
 const API_BASE_URL = "https://api.airtable.com/v0/";
 const SOURCE_ID = "SourceId";
-const VERBOSE_LOGGING = true;
+const TECH_LEADERSHIP_GROUP_MEMBER = "Tech Leadership Group Member";
 
-// how many consecutive linked field "hops" to take (0 = *just* the clicked record)
-const SYNCHRONIZE_LINKED_RECORD_DEPTH = 10;
-
-const getSyncInfo = async () => {
-  const syncTable = base.getTable("SyncInfo");
-  const query = await syncTable.selectRecordsAsync();
-  const record = query.records[0];
-  const destinationSchema = JSON.parse(
-    record.getCellValue("DestinationSchema")
+/* #region Methods */
+const getSyncConfig = async () => {
+  const configTable = base.getTable("Config");
+  const configQuery = await configTable.selectRecordsAsync();
+  const tlConfigRecord = configQuery.records.filter(
+    (r) => r.getCellValue("Name") === "TechLeadershipWebsiteConfig"
   );
-  const syncInfo = {
-    destinationApiKey: record.getCellValue("DestinationApiKey"),
-    destinationBaseId: record.getCellValue("DestinationBaseId"),
-    destinationSchema,
+  if (tlConfigRecord.length !== 1) {
+    throw new Error(
+      `Expected 1 row in the config table with a name of "TechLeadershipWebsiteConfig", but there was ${tlConfigRecord.length}`
+    );
+  }
+  const tlConfigRecordJson = JSON.parse(
+    tlConfigRecord[0].getCellValue("Value")
+  );
+
+  const destinationSchema = tlConfigRecordJson.DestinationSchema;
+
+  const syncConfig = {
+    destinationApiKey: tlConfigRecordJson.DestinationApiKey,
+    destinationBaseId: tlConfigRecordJson.DestinationBaseId,
+    destinationSchema: destinationSchema,
     tablesToSync: Object.keys(destinationSchema),
   };
-  return syncInfo;
+  return syncConfig;
 };
 
 const getRecord = async (apiKey, baseId, tableName, recordId) => {
@@ -133,8 +145,8 @@ const getIdMapping = async (tableName) => {
     await base.getTable(tableName).selectRecordsAsync()
   ).records.map((sr) => sr.id);
   const allSourceIdsInDestination = await getRecords(
-    syncInfo.destinationApiKey,
-    syncInfo.destinationBaseId,
+    syncConfig.destinationApiKey,
+    syncConfig.destinationBaseId,
     tableName,
     [SOURCE_ID]
   );
@@ -206,7 +218,7 @@ const getObjName = (obj) => {
 };
 
 const recurseLinkedFields = async (
-  syncInfo,
+  syncConfig,
   table,
   record,
   linkedFieldTrail = [],
@@ -230,8 +242,8 @@ const recurseLinkedFields = async (
   for (const key in allLinkedFields) {
     const o = allLinkedFields[key];
     if (
-      syncInfo.tablesToSync.includes(o.table) &&
-      syncInfo.destinationSchema[o.table].includes(o.field)
+      syncConfig.tablesToSync.includes(o.table) &&
+      syncConfig.destinationSchema[o.table].includes(o.field)
     ) {
       relevantLinkedFields[key] = o;
     }
@@ -248,26 +260,34 @@ const recurseLinkedFields = async (
           const linkedTable = base.getTable(
             relevantLinkedFields[fieldName].table
           );
-          linkedFieldTrail.push({
-            originTable: table.name,
-            originRecordName: record.name,
-            originFieldName: fieldName,
-            linkedTable: linkedTable.name,
-            linkedRecordName: linkedFieldRecord.name,
-            linkedRecordId: linkedFieldRecord.id,
-          });
+
           const linkedRecord = (
             await linkedTable.selectRecordsAsync()
           ).getRecord(linkedFieldRecord.id);
-          const nextDepth = currentDepth + 1;
-          if (nextDepth <= SYNCHRONIZE_LINKED_RECORD_DEPTH) {
-            linkedFieldTrail = await recurseLinkedFields(
-              syncInfo,
-              linkedTable,
-              linkedRecord,
-              linkedFieldTrail,
-              nextDepth
-            );
+
+          const isContactWithoutTechLeadership =
+            linkedTable.name === "Contacts" &&
+            !linkedRecord.getCellValue(TECH_LEADERSHIP_GROUP_MEMBER);
+
+          if (!isContactWithoutTechLeadership) {
+            linkedFieldTrail.push({
+              originTable: table.name,
+              originRecordName: record.name,
+              originFieldName: fieldName,
+              linkedTable: linkedTable.name,
+              linkedRecordName: linkedFieldRecord.name,
+              linkedRecordId: linkedFieldRecord.id,
+            });
+            const nextDepth = currentDepth + 1;
+            if (nextDepth <= SYNCHRONIZE_LINKED_RECORD_DEPTH) {
+              linkedFieldTrail = await recurseLinkedFields(
+                syncConfig,
+                linkedTable,
+                linkedRecord,
+                linkedFieldTrail,
+                nextDepth
+              );
+            }
           }
         }
       }
@@ -281,17 +301,29 @@ const log = (msg) => {
     output.markdown(msg);
   }
 };
+/* #endregion Methods */
 
-//-------------------------------------------------------------------------------------------
+/* #region Main-Execution */
 
 let activeTable = base.getTable(cursor.activeTableId);
 // Note - this prompt is automatically populated when script is triggered by a button field
 let activeRecord = await input.recordAsync("Record to sync:", activeTable);
 
-const syncInfo = await getSyncInfo();
+if (
+  activeTable.name === "Contacts" &&
+  !activeRecord.getCellValue(TECH_LEADERSHIP_GROUP_MEMBER)
+) {
+  throw new Error(
+    `Can only sync contacts that have "${TECH_LEADERSHIP_GROUP_MEMBER}" checked`
+  );
+}
+
+const syncConfig = await getSyncConfig();
 
 // make sure we start with the active table
-let tablesToSync = syncInfo.tablesToSync.filter((t) => t !== activeTable.name);
+let tablesToSync = syncConfig.tablesToSync.filter(
+  (t) => t !== activeTable.name
+);
 tablesToSync = [activeTable.name, ...tablesToSync];
 
 const idMappingByTable = {};
@@ -303,7 +335,7 @@ for (const table of tablesToSync) {
 let linkedFieldTrail = [];
 if (SYNCHRONIZE_LINKED_RECORD_DEPTH > 0) {
   linkedFieldTrail = await recurseLinkedFields(
-    syncInfo,
+    syncConfig,
     activeTable,
     activeRecord
   );
@@ -353,7 +385,7 @@ for (const lf of linkedFieldTrail) {
   const sourceFieldNames = sourceTable.fields
     .filter((f) => f.type !== "button")
     .map((f) => f.name);
-  const destinationFieldNames = syncInfo.destinationSchema[tableToSync];
+  const destinationFieldNames = syncConfig.destinationSchema[tableToSync];
   const commonFieldNames = sourceFieldNames.filter((sfn) =>
     destinationFieldNames.includes(sfn)
   );
@@ -373,8 +405,8 @@ for (const lf of linkedFieldTrail) {
       commonFieldNames
     );
     await updateRecords(
-      syncInfo.destinationApiKey,
-      syncInfo.destinationBaseId,
+      syncConfig.destinationApiKey,
+      syncConfig.destinationBaseId,
       tableToSync,
       [{ id: idMapping[sr.id], fields: destinationRecord }]
     );
@@ -389,8 +421,8 @@ for (const lf of linkedFieldTrail) {
       commonFieldNames
     );
     await createRecords(
-      syncInfo.destinationApiKey,
-      syncInfo.destinationBaseId,
+      syncConfig.destinationApiKey,
+      syncConfig.destinationBaseId,
       tableToSync,
       [{ fields: destinationRecord }]
     );
@@ -399,3 +431,4 @@ for (const lf of linkedFieldTrail) {
   // update the id mapping for this table (so any linked fields in subsequent tables get the new ids)
   idMappingByTable[tableToSync] = await getIdMapping(tableToSync);
 }
+/* #endregion Main-Execution */

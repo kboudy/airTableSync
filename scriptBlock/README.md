@@ -10,14 +10,15 @@
     - take note of the destination base's id, which can be found [here](https://airtable.com/api)
   - Know your destination base account's API key, which can be found [here](https://airtable.com/account)
 
-1. On the source base, create a `SyncInfo` table with 3 text columns, and populate the values _(table should have one row only)_:
+1. On the source base, if it doesn't already exist, create a `Config` table with `Name` and `Value` columns
 
-- `DestinationApiKey` - the API key for the account that the destination base lives in _(see above)_
-- `DestinationBaseId` - the id of the destination base _(see above)_
-- `DestinationSchema` - a JSON string which conveys the tables & columns in the destination that should be sync'd
-  - values in columns which are not specified here will be preserved during sync's
-  - see example [here](./schemaExample.json)
-  - suggestion: make this column type `Long Text` to accommodate multiple lines
+- make sure the `Value` column type is `Long Text` to accommodate multiple lines
+- Insert a row with a `Name` of `TechLeadershipWebsiteConfig` and a `Value` similar to the JSON example [here](./configExample.json).
+  - Definitions for the values in the JSON config follow:
+    - `DestinationApiKey` - the API key for the account that the destination base lives in _(see above)_
+    - `DestinationBaseId` - the id of the destination base _(see above)_
+    - `DestinationSchema` - a JSON string which conveys the tables & columns in the destination that should be sync'd
+      - values in columns which are not specified here will be preserved during sync's
 
 2. Add 3 [script blocks](https://support.airtable.com/hc/en-us/articles/360043041074-Scripting-block-overview) to the source base, and paste the corresponding code from this project into them
 

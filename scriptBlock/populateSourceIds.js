@@ -8,20 +8,31 @@ const MAX_RECORDS_PER_REQUEST = 10;
 const API_BASE_URL = "https://api.airtable.com/v0/";
 const SOURCE_ID = "SourceId";
 
-const getSyncInfo = async () => {
-  const syncTable = base.getTable("SyncInfo");
-  const query = await syncTable.selectRecordsAsync();
-  const record = query.records[0];
-  const destinationSchema = JSON.parse(
-    record.getCellValue("DestinationSchema")
+/* #region Methods */
+const getSyncConfig = async () => {
+  const configTable = base.getTable("Config");
+  const configQuery = await configTable.selectRecordsAsync();
+  const tlConfigRecord = configQuery.records.filter(
+    (r) => r.getCellValue("Name") === "TechLeadershipWebsiteConfig"
   );
-  const syncInfo = {
-    destinationApiKey: record.getCellValue("DestinationApiKey"),
-    destinationBaseId: record.getCellValue("DestinationBaseId"),
+  if (tlConfigRecord.length !== 1) {
+    throw new Error(
+      `Expected 1 row in the config table with a name of "TechLeadershipWebsiteConfig", but there was ${tlConfigRecord.length}`
+    );
+  }
+  const tlConfigRecordJson = JSON.parse(
+    tlConfigRecord[0].getCellValue("Value")
+  );
+
+  const destinationSchema = tlConfigRecordJson.DestinationSchema;
+
+  const syncConfig = {
+    destinationApiKey: tlConfigRecordJson.DestinationApiKey,
+    destinationBaseId: tlConfigRecordJson.DestinationBaseId,
     destinationSchema: destinationSchema,
     tablesToSync: Object.keys(destinationSchema),
   };
-  return syncInfo;
+  return syncConfig;
 };
 
 const getRecords = async (
@@ -106,17 +117,17 @@ const makeApiRequest = async (
 const updateRecords = async (apiKey, baseId, tableName, records) => {
   await makeApiRequest(apiKey, baseId, tableName, records, "PATCH");
 };
+/* #endregion Methods */
 
-//-------------------------------------------------------------------------------------------
+/* #region Main-Execution */
+const syncConfig = await getSyncConfig();
 
-const syncInfo = await getSyncInfo();
-
-for (const tableToSync of syncInfo.tablesToSync) {
+for (const tableToSync of syncConfig.tablesToSync) {
   const sourceRecords = (await base.getTable(tableToSync).selectRecordsAsync())
     .records;
   const destinationRecords = await getRecords(
-    syncInfo.destinationApiKey,
-    syncInfo.destinationBaseId,
+    syncConfig.destinationApiKey,
+    syncConfig.destinationBaseId,
     tableToSync
   );
   const recordsToUpdate = [];
@@ -131,9 +142,10 @@ for (const tableToSync of syncInfo.tablesToSync) {
     }
   }
   await updateRecords(
-    syncInfo.destinationApiKey,
-    syncInfo.destinationBaseId,
+    syncConfig.destinationApiKey,
+    syncConfig.destinationBaseId,
     tableToSync,
     recordsToUpdate
   );
 }
+/* #endregion Main-Execution */
