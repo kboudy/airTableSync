@@ -289,7 +289,6 @@ let activeTable = base.getTable(cursor.activeTableId);
 let activeRecord = await input.recordAsync("Record to sync:", activeTable);
 
 const syncInfo = await getSyncInfo();
-const jobTimestamp = new Date().getTime();
 
 // make sure we start with the active table
 let tablesToSync = syncInfo.tablesToSync.filter((t) => t !== activeTable.name);
