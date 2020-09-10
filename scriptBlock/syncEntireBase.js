@@ -219,7 +219,6 @@ const convertToDestinationRecord = async (
 //-------------------------------------------------------------------------------------------
 
 const syncInfo = await getSyncInfo();
-const jobTimestamp = new Date().getTime();
 
 output.markdown(
   `## Tables to synchronize: ${syncInfo.tablesToSync
