@@ -40,7 +40,7 @@
     - **update** records in the destination, using the `SourceId` column
     - **add** records to the destination which did not exist
     - **delete** records in the destination which don't exist in the source
-      - these would have been logged as have 0 matches in the previous `populateSourceIds` script
+      - these would have been logged as having 0 matches in the previous `populateSourceIds` script
   - you can optionally delete this script, depending on whether you foresee needing to do an entire base sync again
 
 ## Per-record sync
