@@ -11,7 +11,7 @@ const VERBOSE_LOGGING = true;
 const MAX_RECORDS_PER_REQUEST = 10;
 const API_BASE_URL = "https://api.airtable.com/v0/";
 const SOURCE_ID = "SourceId";
-const TECH_LEADERSHIP_GROUP_MEMBER = "Tech Leadership Group Member";
+const ALLOW_SYNC_TO_TLG_WEBSITE = "Allow Sync to TLG Website";
 
 /* #region Methods */
 const getSyncConfig = async () => {
@@ -212,7 +212,8 @@ const convertToDestinationRecord = async (
 // for logging - get a friendly name for the company or contact
 const getObjName = (obj) => {
   if (obj["First Name"]) {
-    return `${obj["First Name"]} ${obj["Last Name"]}`;
+    const lastName = obj["Last Name"] ? obj["Last Name"].trim() : "";
+    return `${obj["First Name"].trim()} ${lastName}`;
   }
   return obj.Name;
 };
@@ -267,7 +268,7 @@ const recurseLinkedFields = async (
 
           const isContactWithoutTechLeadership =
             linkedTable.name === "Contacts" &&
-            !linkedRecord.getCellValue(TECH_LEADERSHIP_GROUP_MEMBER);
+            !linkedRecord.getCellValue(ALLOW_SYNC_TO_TLG_WEBSITE);
 
           if (!isContactWithoutTechLeadership) {
             linkedFieldTrail.push({
@@ -311,10 +312,10 @@ let activeRecord = await input.recordAsync("Record to sync:", activeTable);
 
 if (
   activeTable.name === "Contacts" &&
-  !activeRecord.getCellValue(TECH_LEADERSHIP_GROUP_MEMBER)
+  !activeRecord.getCellValue(ALLOW_SYNC_TO_TLG_WEBSITE)
 ) {
   throw new Error(
-    `Can only sync contacts that have "${TECH_LEADERSHIP_GROUP_MEMBER}" checked`
+    `Can only sync contacts that have "${ALLOW_SYNC_TO_TLG_WEBSITE}" checked`
   );
 }
 

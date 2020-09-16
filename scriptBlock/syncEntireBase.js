@@ -7,7 +7,8 @@ NOTE: This is designed to live in a script block, on airTable
 const MAX_RECORDS_PER_REQUEST = 10;
 const API_BASE_URL = "https://api.airtable.com/v0/";
 const SOURCE_ID = "SourceId";
-const TECH_LEADERSHIP_GROUP_MEMBER = "Tech Leadership Group Member";
+const ALLOW_SYNC_TO_TLG_WEBSITE = "Allow Sync to TLG Website";
+const CONTACTS_TABLE_NAME = "Contacts";
 
 /* #region Methods */
 const getSyncConfig = async () => {
@@ -227,6 +228,71 @@ const convertToDestinationRecord = async (
   destinationRecord[SOURCE_ID] = sourceRecord.id;
   return destinationRecord;
 };
+
+// for logging - get a friendly name for the company or contact
+const getObjName = (obj) => {
+  if (obj.fields["First Name"]) {
+    const lastName = obj.fields["Last Name"]
+      ? obj.fields["Last Name"].trim()
+      : "";
+    return `${obj.fields["First Name"].trim()} ${lastName}`;
+  }
+  return obj.fields.Name;
+};
+
+const basename = (path) => {
+  if (!path) {
+    return "";
+  }
+  //NOTE: talk to jake about re-sync'ing the attachments between source base & dest base, as they're slightly different
+  const cleaned = path.split("%2").join("2").split("%5").join("5");
+  return cleaned.replace(/.*\//, "");
+};
+
+// "same" from the perspective of (source base's native API obj & dest base's REST API obj)
+const arraysAreSame = (a1, a2) => {
+  const a1IsEmpty = !a1 || a1.length === 0;
+  const a2IsEmpty = !a2 || a2.length === 0;
+  if (a1IsEmpty && a2IsEmpty) {
+    return true;
+  }
+  if (a1IsEmpty !== a2IsEmpty) {
+    return false;
+  }
+  if (a1.length !== a2.length) {
+    return false;
+  }
+  if (a1 && a1.length > 0 && a1[0].url) {
+    const a1Urls = a1.map((a) => basename(a.url));
+    const a2Urls = a2.map((a) => basename(a.url));
+    return a1Urls.join(",") === a2Urls.join(",");
+  }
+  return a1.join(",") === a2.join(",");
+};
+
+const objectsAreSame = (o1, o2) => {
+  if (!o1 && !o2) {
+    return true;
+  }
+  return JSON.stringify(o1 ? o1 : "") === JSON.stringify(o2 ? o2 : "");
+};
+
+const fieldsHaveChanged = (before, after, commonFieldNames) => {
+  for (const f of commonFieldNames) {
+    const beforeVal = before[f];
+    const afterVal = after[f];
+    if (Array.isArray(beforeVal) || Array.isArray(afterVal)) {
+      if (!arraysAreSame(beforeVal, afterVal)) {
+        console.log(beforeVal);
+        console.log(afterVal);
+        return true;
+      }
+    } else if (!objectsAreSame(beforeVal, afterVal)) {
+      return true;
+    }
+  }
+  return false;
+};
 /* #endregion Methods */
 
 /* #region Main-Execution */
@@ -275,10 +341,27 @@ for (const tableToSync of syncConfig.tablesToSync) {
   );
   const sourceRecords = (await sourceTable.selectRecordsAsync()).records.filter(
     (sr) =>
-      tableToSync !== "Contacts" ||
-      sr.getCellValue(TECH_LEADERSHIP_GROUP_MEMBER)
+      tableToSync !== CONTACTS_TABLE_NAME ||
+      sr.getCellValue(ALLOW_SYNC_TO_TLG_WEBSITE)
   );
   const sourceRecordIds = sourceRecords.map((sr) => sr.id);
+
+  const allDestinationRecords = await getRecords(
+    syncConfig.destinationApiKey,
+    syncConfig.destinationBaseId,
+    tableToSync
+  );
+
+  const sourceRecords_withoutAllowSync = (
+    await sourceTable.selectRecordsAsync()
+  ).records.filter(
+    (sr) =>
+      tableToSync === CONTACTS_TABLE_NAME &&
+      !sr.getCellValue(ALLOW_SYNC_TO_TLG_WEBSITE)
+  );
+  const sourceRecordIds_withoutAllowSync = sourceRecords_withoutAllowSync.map(
+    (sr) => sr.id
+  );
 
   const { allSourceIdsInDestination, idMapping } = idMappingByTable[
     tableToSync
@@ -289,12 +372,12 @@ for (const tableToSync of syncConfig.tablesToSync) {
   const recordsToCreate = [];
   const recordsToUpdate = [];
   const recordsToDelete = [];
+  const recordsToWarnOfNonExistence = [];
 
   // for each source record, if there's a corresponding destination record, update it.  Otherwise, add it;
   for (const sr of sourceRecords) {
     if (idMapping[sr.id]) {
-      // it exists - update it;
-      counts.update++;
+      // it exists - update it if any fields have changed
       const destinationRecord = await convertToDestinationRecord(
         sr,
         linkedFields,
@@ -303,7 +386,22 @@ for (const tableToSync of syncConfig.tablesToSync) {
         idMappingByTable,
         commonFieldNames
       );
-      recordsToUpdate.push({ id: idMapping[sr.id], fields: destinationRecord });
+      const destRecordBefore = allDestinationRecords.filter(
+        (dr) => dr.id === idMapping[sr.id]
+      )[0];
+      if (
+        fieldsHaveChanged(
+          destRecordBefore.fields,
+          destinationRecord,
+          commonFieldNames
+        )
+      ) {
+        counts.update++;
+        recordsToUpdate.push({
+          id: idMapping[sr.id],
+          fields: destinationRecord,
+        });
+      }
     } else {
       // it doesn't exist - add it;
       counts.create++;
@@ -319,12 +417,23 @@ for (const tableToSync of syncConfig.tablesToSync) {
     }
   }
 
+  const destinationRecordIds_withoutAllowSync = [];
+  for (const sIdW of sourceRecordIds_withoutAllowSync) {
+    destinationRecordIds_withoutAllowSync.push(idMapping[sIdW]);
+  }
   const destinationIdsToDelete = allSourceIdsInDestination
     .filter((r) => !sourceRecordIds.includes(r.fields[SOURCE_ID]))
     .map((r) => r.id);
   for (const id of destinationIdsToDelete) {
-    recordsToDelete.push(id);
-    counts.delete++;
+    if (
+      tableToSync !== CONTACTS_TABLE_NAME ||
+      destinationRecordIds_withoutAllowSync.includes(id)
+    ) {
+      recordsToDelete.push(id);
+      counts.delete++;
+    } else if (tableToSync === CONTACTS_TABLE_NAME) {
+      recordsToWarnOfNonExistence.push(id);
+    }
   }
 
   if (recordsToUpdate.length > 0) {
@@ -357,8 +466,38 @@ for (const tableToSync of syncConfig.tablesToSync) {
   // update the id mapping for this table (so any linked fields in subsequent tables get the new ids)
   idMappingByTable[tableToSync] = await getIdMapping(tableToSync);
 
-  output.markdown(`* created: ${counts.create}`);
-  output.markdown(`* updated: ${counts.update}`);
-  output.markdown(`* deleted: ${counts.delete}`);
+  output.markdown(`**created: ${counts.create}**`);
+  for (const r of recordsToCreate) {
+    output.markdown(`* ${getObjName(r)}`);
+  }
+
+  output.markdown(`**updated: ${counts.update}**`);
+  for (const r of recordsToUpdate) {
+    output.markdown(`* ${getObjName(r)}`);
+  }
+
+  const tic = "`";
+  const deletedExplanation =
+    counts.delete > 0 && tableToSync === CONTACTS_TABLE_NAME
+      ? ` *(because ${tic}${ALLOW_SYNC_TO_TLG_WEBSITE}${tic} was not checked)*`
+      : "";
+  output.markdown(`**deleted${deletedExplanation}: ${counts.delete}**`);
+  for (const rId of recordsToDelete) {
+    const match = allDestinationRecords.filter((d) => d.id === rId);
+    if (match.length > 0) {
+      output.markdown(`* ${getObjName(match[0])}`);
+    }
+  }
+  if (recordsToWarnOfNonExistence.length > 0) {
+    output.markdown(
+      `**note: the following have no match in the source base (but no action was taken):**`
+    );
+    for (const rId of recordsToWarnOfNonExistence) {
+      const match = allDestinationRecords.filter((d) => d.id === rId);
+      if (match.length > 0) {
+        output.markdown(`* ${getObjName(match[0])}`);
+      }
+    }
+  }
 }
 /* #endregion Main-Execution */
