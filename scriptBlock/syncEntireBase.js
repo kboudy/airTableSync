@@ -265,8 +265,12 @@ const arraysAreSame = (a1, a2) => {
   if (a1 && a1.length > 0 && a1[0].url) {
     const a1Urls = a1.map((a) => basename(a.url));
     const a2Urls = a2.map((a) => basename(a.url));
+    a1Urls.sort();
+    a2Urls.sort();
     return a1Urls.join(",") === a2Urls.join(",");
   }
+  a1.sort();
+  a2.sort();
   return a1.join(",") === a2.join(",");
 };
 
@@ -283,8 +287,6 @@ const fieldsHaveChanged = (before, after, commonFieldNames) => {
     const afterVal = after[f];
     if (Array.isArray(beforeVal) || Array.isArray(afterVal)) {
       if (!arraysAreSame(beforeVal, afterVal)) {
-        console.log(beforeVal);
-        console.log(afterVal);
         return true;
       }
     } else if (!objectsAreSame(beforeVal, afterVal)) {
