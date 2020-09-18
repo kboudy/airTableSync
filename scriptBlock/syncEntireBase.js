@@ -9,6 +9,8 @@ const API_BASE_URL = "https://api.airtable.com/v0/";
 const SOURCE_ID = "SourceId";
 const ALLOW_SYNC_TO_TLG_WEBSITE = "Allow Sync to TLG Website";
 const CONTACTS_TABLE_NAME = "Contacts";
+const INVALID_MULTIPLE_CHOICE_OPTIONS = "INVALID_MULTIPLE_CHOICE_OPTIONS";
+const TIC = "`";
 
 /* #region Methods */
 const getSyncConfig = async () => {
@@ -124,17 +126,24 @@ const makeApiRequest = async (
     });
     const json = await response.json();
     if (json.error) {
-      throw new Error(JSON.stringify(json.error));
+      const isInvalidOptionsError =
+        json.error.type && json.error.type === INVALID_MULTIPLE_CHOICE_OPTIONS;
+
+      // we won't throw on "invalid options" - we'll return a friendly/formatted/informative message
+      if (!isInvalidOptionsError) {
+        throw new Error(JSON.stringify(json.error));
+      }
     }
+    return json;
   }
 };
 
 const createRecords = async (apiKey, baseId, tableName, records) => {
-  await makeApiRequest(apiKey, baseId, tableName, records, "POST");
+  return await makeApiRequest(apiKey, baseId, tableName, records, "POST");
 };
 
 const updateRecords = async (apiKey, baseId, tableName, records) => {
-  await makeApiRequest(apiKey, baseId, tableName, records, "PATCH");
+  return await makeApiRequest(apiKey, baseId, tableName, records, "PATCH");
 };
 
 const deleteRecords = async (apiKey, baseId, tableName, ids) => {
@@ -235,7 +244,14 @@ const getObjName = (obj) => {
     const lastName = obj.fields["Last Name"]
       ? obj.fields["Last Name"].trim()
       : "";
-    return `${obj.fields["First Name"].trim()} ${lastName}`;
+    const fullName = `${obj.fields["First Name"].trim()} ${lastName}`.trim();
+    if (!fullName) {
+      return "<No name>";
+    }
+    return fullName;
+  }
+  if (!obj.fields.name) {
+    return "<No name>";
   }
   return obj.fields.Name;
 };
@@ -244,7 +260,7 @@ const basename = (path) => {
   if (!path) {
     return "";
   }
-  //NOTE: talk to jake about re-sync'ing the attachments between source base & dest base, as they're slightly different
+  //NOTE: it's unfortunately necessary to do this replace to compare source & dest urls (AirTable apparently makes a small change when updating via REST API)
   const cleaned = path.split("%2").join("2").split("%5").join("5");
   return cleaned.replace(/.*\//, "");
 };
@@ -281,6 +297,21 @@ const objectsAreSame = (o1, o2) => {
   return JSON.stringify(o1 ? o1 : "") === JSON.stringify(o2 ? o2 : "");
 };
 
+const logFriendlyErrorMessageIfNecessary = (jsonResponse, tableName) => {
+  if (
+    jsonResponse &&
+    jsonResponse.error &&
+    jsonResponse.error.type === INVALID_MULTIPLE_CHOICE_OPTIONS
+  ) {
+    const newSelectOptionName = jsonResponse.error.message.split('"')[2];
+    output.markdown(
+      `* ${TIC}SYNC FAILED (for the table ${tableName}): The new select option "${newSelectOptionName}" caused an error when sync'ing.  The is an issue with the AirTable API.  It should stop happening if you try sync again soon.${TIC}`
+    );
+    return true;
+  }
+  return false;
+};
+
 const fieldsHaveChanged = (before, after, commonFieldNames) => {
   for (const f of commonFieldNames) {
     const beforeVal = before[f];
@@ -300,206 +331,220 @@ const fieldsHaveChanged = (before, after, commonFieldNames) => {
 /* #region Main-Execution */
 const syncConfig = await getSyncConfig();
 
-output.markdown(
-  `## Tables to synchronize: ${syncConfig.tablesToSync
-    .map((t) => "`" + t + "`")
-    .join(",")}`
-);
-
-const idMappingByTable = {};
-for (const table of syncConfig.tablesToSync) {
-  idMappingByTable[table] = await getIdMapping(table);
-}
-
-for (const tableToSync of syncConfig.tablesToSync) {
-  output.markdown(`#### Synchronizing table "${tableToSync}"`);
-
-  const sourceTable = base.getTable(tableToSync);
-  const linkedFields = sourceTable.fields
-    .filter((f) => f.type === "multipleRecordLinks")
-    .reduce((acc, f) => {
-      const linkedTable = base.getTable(f.options.linkedTableId);
-      const linkedField = linkedTable.fields.filter(
-        (ltf) => ltf.id === f.options.inverseLinkFieldId
-      )[0];
-
-      acc[f.name] = {
-        table: linkedTable.name,
-        field: linkedField.name,
-      };
-      return acc;
-    }, {});
-
-  const attachmentFieldNames = sourceTable.fields
-    .filter((f) => f.type === "multipleAttachments")
-    .map((f) => f.name);
-  const selectFieldNames = sourceTable.fields
-    .filter((f) => f.type === "singleSelect" || f.type === "multipleSelects")
-    .map((f) => f.name);
-  const sourceFieldNames = sourceTable.fields.map((f) => f.name);
-  const destinationFieldNames = syncConfig.destinationSchema[tableToSync];
-  const commonFieldNames = sourceFieldNames.filter((sfn) =>
-    destinationFieldNames.includes(sfn)
-  );
-  const sourceRecords = (await sourceTable.selectRecordsAsync()).records.filter(
-    (sr) =>
-      tableToSync !== CONTACTS_TABLE_NAME ||
-      sr.getCellValue(ALLOW_SYNC_TO_TLG_WEBSITE)
-  );
-  const sourceRecordIds = sourceRecords.map((sr) => sr.id);
-
-  const allDestinationRecords = await getRecords(
-    syncConfig.destinationApiKey,
-    syncConfig.destinationBaseId,
-    tableToSync
+const main = async () => {
+  output.markdown(
+    `## Tables to synchronize: ${syncConfig.tablesToSync
+      .map((t) => "`" + t + "`")
+      .join(",")}`
   );
 
-  const sourceRecords_withoutAllowSync = (
-    await sourceTable.selectRecordsAsync()
-  ).records.filter(
-    (sr) =>
-      tableToSync === CONTACTS_TABLE_NAME &&
-      !sr.getCellValue(ALLOW_SYNC_TO_TLG_WEBSITE)
-  );
-  const sourceRecordIds_withoutAllowSync = sourceRecords_withoutAllowSync.map(
-    (sr) => sr.id
-  );
+  const idMappingByTable = {};
+  for (const table of syncConfig.tablesToSync) {
+    idMappingByTable[table] = await getIdMapping(table);
+  }
 
-  const { allSourceIdsInDestination, idMapping } = idMappingByTable[
-    tableToSync
-  ];
+  for (const tableToSync of syncConfig.tablesToSync) {
+    output.markdown(`#### Synchronizing table "${tableToSync}"`);
 
-  const counts = { create: 0, update: 0, delete: 0 };
+    const sourceTable = base.getTable(tableToSync);
+    const linkedFields = sourceTable.fields
+      .filter((f) => f.type === "multipleRecordLinks")
+      .reduce((acc, f) => {
+        const linkedTable = base.getTable(f.options.linkedTableId);
+        const linkedField = linkedTable.fields.filter(
+          (ltf) => ltf.id === f.options.inverseLinkFieldId
+        )[0];
 
-  const recordsToCreate = [];
-  const recordsToUpdate = [];
-  const recordsToDelete = [];
-  const recordsToWarnOfNonExistence = [];
+        acc[f.name] = {
+          table: linkedTable.name,
+          field: linkedField.name,
+        };
+        return acc;
+      }, {});
 
-  // for each source record, if there's a corresponding destination record, update it.  Otherwise, add it;
-  for (const sr of sourceRecords) {
-    if (idMapping[sr.id]) {
-      // it exists - update it if any fields have changed
-      const destinationRecord = await convertToDestinationRecord(
-        sr,
-        linkedFields,
-        attachmentFieldNames,
-        selectFieldNames,
-        idMappingByTable,
-        commonFieldNames
-      );
-      const destRecordBefore = allDestinationRecords.filter(
-        (dr) => dr.id === idMapping[sr.id]
-      )[0];
-      if (
-        fieldsHaveChanged(
-          destRecordBefore.fields,
-          destinationRecord,
+    const attachmentFieldNames = sourceTable.fields
+      .filter((f) => f.type === "multipleAttachments")
+      .map((f) => f.name);
+    const selectFieldNames = sourceTable.fields
+      .filter((f) => f.type === "singleSelect" || f.type === "multipleSelects")
+      .map((f) => f.name);
+    const sourceFieldNames = sourceTable.fields.map((f) => f.name);
+    const destinationFieldNames = syncConfig.destinationSchema[tableToSync];
+    const commonFieldNames = sourceFieldNames.filter((sfn) =>
+      destinationFieldNames.includes(sfn)
+    );
+    const sourceRecords = (
+      await sourceTable.selectRecordsAsync()
+    ).records.filter(
+      (sr) =>
+        tableToSync !== CONTACTS_TABLE_NAME ||
+        sr.getCellValue(ALLOW_SYNC_TO_TLG_WEBSITE)
+    );
+    const sourceRecordIds = sourceRecords.map((sr) => sr.id);
+
+    const allDestinationRecords = await getRecords(
+      syncConfig.destinationApiKey,
+      syncConfig.destinationBaseId,
+      tableToSync
+    );
+
+    const sourceRecords_withoutAllowSync = (
+      await sourceTable.selectRecordsAsync()
+    ).records.filter(
+      (sr) =>
+        tableToSync === CONTACTS_TABLE_NAME &&
+        !sr.getCellValue(ALLOW_SYNC_TO_TLG_WEBSITE)
+    );
+    const sourceRecordIds_withoutAllowSync = sourceRecords_withoutAllowSync.map(
+      (sr) => sr.id
+    );
+
+    const { allSourceIdsInDestination, idMapping } = idMappingByTable[
+      tableToSync
+    ];
+
+    const counts = { create: 0, update: 0, delete: 0 };
+
+    const recordsToCreate = [];
+    const recordsToUpdate = [];
+    const recordsToDelete = [];
+    const recordsToWarnOfNonExistence = [];
+
+    // for each source record, if there's a corresponding destination record, update it.  Otherwise, add it;
+    for (const sr of sourceRecords) {
+      if (idMapping[sr.id]) {
+        // it exists - update it if any fields have changed
+        const destinationRecord = await convertToDestinationRecord(
+          sr,
+          linkedFields,
+          attachmentFieldNames,
+          selectFieldNames,
+          idMappingByTable,
           commonFieldNames
-        )
-      ) {
-        counts.update++;
-        recordsToUpdate.push({
+        );
+        const destRecordBefore = allDestinationRecords.filter(
+          (dr) => dr.id === idMapping[sr.id]
+        )[0];
+        if (
+          fieldsHaveChanged(
+            destRecordBefore.fields,
+            destinationRecord,
+            commonFieldNames
+          )
+        ) {
+          counts.update++;
+          recordsToUpdate.push({
+            id: idMapping[sr.id],
+            fields: destinationRecord,
+          });
+        }
+      } else {
+        // it doesn't exist - add it;
+        counts.create++;
+        const destinationRecord = await convertToDestinationRecord(
+          sr,
+          linkedFields,
+          attachmentFieldNames,
+          selectFieldNames,
+          idMappingByTable,
+          commonFieldNames
+        );
+        recordsToCreate.push({
           id: idMapping[sr.id],
           fields: destinationRecord,
         });
       }
-    } else {
-      // it doesn't exist - add it;
-      counts.create++;
-      const destinationRecord = await convertToDestinationRecord(
-        sr,
-        linkedFields,
-        attachmentFieldNames,
-        selectFieldNames,
-        idMappingByTable,
-        commonFieldNames
+    }
+
+    const destinationRecordIds_withoutAllowSync = [];
+    for (const sIdW of sourceRecordIds_withoutAllowSync) {
+      destinationRecordIds_withoutAllowSync.push(idMapping[sIdW]);
+    }
+    const destinationIdsToDelete = allSourceIdsInDestination
+      .filter((r) => !sourceRecordIds.includes(r.fields[SOURCE_ID]))
+      .map((r) => r.id);
+    for (const id of destinationIdsToDelete) {
+      if (
+        tableToSync !== CONTACTS_TABLE_NAME ||
+        destinationRecordIds_withoutAllowSync.includes(id)
+      ) {
+        recordsToDelete.push(id);
+        counts.delete++;
+      } else if (tableToSync === CONTACTS_TABLE_NAME) {
+        recordsToWarnOfNonExistence.push(id);
+      }
+    }
+
+    if (recordsToUpdate.length > 0) {
+      const jsonResponse = await updateRecords(
+        syncConfig.destinationApiKey,
+        syncConfig.destinationBaseId,
+        tableToSync,
+        recordsToUpdate
       );
-      recordsToCreate.push({ id: idMapping[sr.id], fields: destinationRecord });
+      if (logFriendlyErrorMessageIfNecessary(jsonResponse, tableToSync)) {
+        return;
+      }
     }
-  }
 
-  const destinationRecordIds_withoutAllowSync = [];
-  for (const sIdW of sourceRecordIds_withoutAllowSync) {
-    destinationRecordIds_withoutAllowSync.push(idMapping[sIdW]);
-  }
-  const destinationIdsToDelete = allSourceIdsInDestination
-    .filter((r) => !sourceRecordIds.includes(r.fields[SOURCE_ID]))
-    .map((r) => r.id);
-  for (const id of destinationIdsToDelete) {
-    if (
-      tableToSync !== CONTACTS_TABLE_NAME ||
-      destinationRecordIds_withoutAllowSync.includes(id)
-    ) {
-      recordsToDelete.push(id);
-      counts.delete++;
-    } else if (tableToSync === CONTACTS_TABLE_NAME) {
-      recordsToWarnOfNonExistence.push(id);
+    if (recordsToCreate.length > 0) {
+      const jsonResponse = await createRecords(
+        syncConfig.destinationApiKey,
+        syncConfig.destinationBaseId,
+        tableToSync,
+        recordsToCreate
+      );
+      if (logFriendlyErrorMessageIfNecessary(jsonResponse, tableToSync)) {
+        return;
+      }
     }
-  }
 
-  if (recordsToUpdate.length > 0) {
-    await updateRecords(
-      syncConfig.destinationApiKey,
-      syncConfig.destinationBaseId,
-      tableToSync,
-      recordsToUpdate
-    );
-  }
-
-  if (recordsToCreate.length > 0) {
-    await createRecords(
-      syncConfig.destinationApiKey,
-      syncConfig.destinationBaseId,
-      tableToSync,
-      recordsToCreate
-    );
-  }
-
-  if (recordsToDelete.length > 0) {
-    await deleteRecords(
-      syncConfig.destinationApiKey,
-      syncConfig.destinationBaseId,
-      tableToSync,
-      recordsToDelete
-    );
-  }
-
-  // update the id mapping for this table (so any linked fields in subsequent tables get the new ids)
-  idMappingByTable[tableToSync] = await getIdMapping(tableToSync);
-
-  output.markdown(`**created: ${counts.create}**`);
-  for (const r of recordsToCreate) {
-    output.markdown(`* ${getObjName(r)}`);
-  }
-
-  output.markdown(`**updated: ${counts.update}**`);
-  for (const r of recordsToUpdate) {
-    output.markdown(`* ${getObjName(r)}`);
-  }
-
-  const tic = "`";
-  const deletedExplanation =
-    counts.delete > 0 && tableToSync === CONTACTS_TABLE_NAME
-      ? ` *(because ${tic}${ALLOW_SYNC_TO_TLG_WEBSITE}${tic} was not checked)*`
-      : "";
-  output.markdown(`**deleted${deletedExplanation}: ${counts.delete}**`);
-  for (const rId of recordsToDelete) {
-    const match = allDestinationRecords.filter((d) => d.id === rId);
-    if (match.length > 0) {
-      output.markdown(`* ${getObjName(match[0])}`);
+    if (recordsToDelete.length > 0) {
+      await deleteRecords(
+        syncConfig.destinationApiKey,
+        syncConfig.destinationBaseId,
+        tableToSync,
+        recordsToDelete
+      );
     }
-  }
-  if (recordsToWarnOfNonExistence.length > 0) {
-    output.markdown(
-      `**note: the following have no match in the source base (but no action was taken):**`
-    );
-    for (const rId of recordsToWarnOfNonExistence) {
+
+    // update the id mapping for this table (so any linked fields in subsequent tables get the new ids)
+    idMappingByTable[tableToSync] = await getIdMapping(tableToSync);
+
+    output.markdown(`**created: ${counts.create}**`);
+    for (const r of recordsToCreate) {
+      output.markdown(`* ${getObjName(r)}`);
+    }
+
+    output.markdown(`**updated: ${counts.update}**`);
+    for (const r of recordsToUpdate) {
+      output.markdown(`* ${getObjName(r)}`);
+    }
+
+    const deletedExplanation =
+      counts.delete > 0 && tableToSync === CONTACTS_TABLE_NAME
+        ? ` *(because ${TIC}${ALLOW_SYNC_TO_TLG_WEBSITE}${TIC} was not checked)*`
+        : "";
+    output.markdown(`**deleted${deletedExplanation}: ${counts.delete}**`);
+    for (const rId of recordsToDelete) {
       const match = allDestinationRecords.filter((d) => d.id === rId);
       if (match.length > 0) {
         output.markdown(`* ${getObjName(match[0])}`);
       }
     }
+    if (recordsToWarnOfNonExistence.length > 0) {
+      output.markdown(
+        `**note: the following have no match in the source base (but no action was taken):**`
+      );
+      for (const rId of recordsToWarnOfNonExistence) {
+        const match = allDestinationRecords.filter((d) => d.id === rId);
+        if (match.length > 0) {
+          output.markdown(`* ${getObjName(match[0])}`);
+        }
+      }
+    }
   }
-}
+};
+
+await main();
 /* #endregion Main-Execution */

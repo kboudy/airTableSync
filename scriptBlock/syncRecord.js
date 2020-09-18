@@ -12,6 +12,8 @@ const MAX_RECORDS_PER_REQUEST = 10;
 const API_BASE_URL = "https://api.airtable.com/v0/";
 const SOURCE_ID = "SourceId";
 const ALLOW_SYNC_TO_TLG_WEBSITE = "Allow Sync to TLG Website";
+const INVALID_MULTIPLE_CHOICE_OPTIONS = "INVALID_MULTIPLE_CHOICE_OPTIONS";
+const TIC = "`";
 
 /* #region Methods */
 const getSyncConfig = async () => {
@@ -38,6 +40,15 @@ const getSyncConfig = async () => {
     tablesToSync: Object.keys(destinationSchema),
   };
   return syncConfig;
+};
+
+const makeSingular = (word) => {
+  if (word.endsWith("ies")) {
+    return word.slice(0, word.length - 3) + "y";
+  } else if (word.endsWith("s")) {
+    return word.slice(0, word.length - 1);
+  }
+  return word;
 };
 
 const getRecord = async (apiKey, baseId, tableName, recordId) => {
@@ -127,17 +138,24 @@ const makeApiRequest = async (
     });
     const json = await response.json();
     if (json.error) {
-      throw new Error(JSON.stringify(json.error));
+      const isInvalidOptionsError =
+        json.error.type && json.error.type === INVALID_MULTIPLE_CHOICE_OPTIONS;
+
+      // we won't throw on "invalid options" - we'll return a friendly/formatted/informative message
+      if (!isInvalidOptionsError) {
+        throw new Error(JSON.stringify(json.error));
+      }
     }
+    return json;
   }
 };
 
 const createRecords = async (apiKey, baseId, tableName, records) => {
-  await makeApiRequest(apiKey, baseId, tableName, records, "POST");
+  return await makeApiRequest(apiKey, baseId, tableName, records, "POST");
 };
 
 const updateRecords = async (apiKey, baseId, tableName, records) => {
-  await makeApiRequest(apiKey, baseId, tableName, records, "PATCH");
+  return await makeApiRequest(apiKey, baseId, tableName, records, "PATCH");
 };
 
 const getIdMapping = async (tableName) => {
@@ -213,7 +231,14 @@ const convertToDestinationRecord = async (
 const getObjName = (obj) => {
   if (obj["First Name"]) {
     const lastName = obj["Last Name"] ? obj["Last Name"].trim() : "";
-    return `${obj["First Name"].trim()} ${lastName}`;
+    const fullName = `${obj["First Name"].trim()} ${lastName}`.trim();
+    if (!fullName) {
+      return "<No name>";
+    }
+    return fullName;
+  }
+  if (!obj.name) {
+    return "<No name>";
   }
   return obj.Name;
 };
@@ -352,11 +377,10 @@ linkedFieldTrail = [
   ...linkedFieldTrail,
 ];
 
-const tic = "`";
 for (const lf of linkedFieldTrail) {
   if (lf.originTable) {
     log(
-      `* ${lf.originTable}[["${lf.originRecordName}"]].${lf.originFieldName} → ${tic}${lf.linkedTable}["${lf.linkedRecordName}"]${tic}`
+      `* ${lf.originTable}[["${lf.originRecordName}"]].${lf.originFieldName} → ${TIC}${lf.linkedTable}["${lf.linkedRecordName}"]${TIC}`
     );
   } else {
     log(`## ${activeTable.name}[["${activeRecord.name}"]]`);
@@ -366,9 +390,9 @@ for (const lf of linkedFieldTrail) {
   const linkedFields = sourceTable.fields
     .filter((f) => f.type === "multipleRecordLinks")
     .reduce((acc, f) => {
-      const linkedTable = base.getTable(f.options.linkedTableId);
+      const linkedTable = base.getTable(f.options["linkedTableId"]);
       const linkedField = linkedTable.fields.filter(
-        (ltf) => ltf.id === f.options.inverseLinkFieldId
+        (ltf) => ltf.id === f.options["inverseLinkFieldId"]
       )[0];
 
       acc[f.name] = {
@@ -395,6 +419,7 @@ for (const lf of linkedFieldTrail) {
   const sr = (await sourceTable.selectRecordsAsync()).getRecord(
     lf.linkedRecordId
   );
+  let jsonResponse;
   if (idMapping[sr.id]) {
     // it exists - update it;
     const destinationRecord = await convertToDestinationRecord(
@@ -405,7 +430,7 @@ for (const lf of linkedFieldTrail) {
       idMappingByTable,
       commonFieldNames
     );
-    await updateRecords(
+    jsonResponse = await updateRecords(
       syncConfig.destinationApiKey,
       syncConfig.destinationBaseId,
       tableToSync,
@@ -421,11 +446,30 @@ for (const lf of linkedFieldTrail) {
       idMappingByTable,
       commonFieldNames
     );
-    await createRecords(
+    jsonResponse = await createRecords(
       syncConfig.destinationApiKey,
       syncConfig.destinationBaseId,
       tableToSync,
       [{ fields: destinationRecord }]
+    );
+  }
+  // NOTE: the only time we'll get an error response, it will be INVALID_MULTIPLE_CHOICE_OPTIONS (otherwise it would have thrown)
+  // being specific, regardless
+  if (
+    jsonResponse.error &&
+    jsonResponse.error.type === INVALID_MULTIPLE_CHOICE_OPTIONS
+  ) {
+    const newSelectOptionName = jsonResponse.error.message.split('"')[2];
+    const tableNameWithIssue = lf.originTable
+      ? lf.linkedTable
+      : activeTable.name;
+    const recordNameWithIssue = lf.originTable
+      ? lf.originRecordName
+      : activeRecord.name;
+    log(
+      `* ${TIC}SYNC FAILED (for the ${makeSingular(
+        tableNameWithIssue
+      )} "${recordNameWithIssue}"): The new select option "${newSelectOptionName}" caused an error when sync'ing.  The is an issue with the AirTable API.  It should stop happening if you try sync'ing this record again soon.${TIC}`
     );
   }
 
