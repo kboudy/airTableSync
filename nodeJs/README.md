@@ -15,8 +15,9 @@ Proof of concept for one-way sync for a table in 2 different bases
 - create env variables, or a `.env` file (in the project's root dir) with the following format:
 
 ```
-AIRTABLE_API_KEY=someApiKey
-SOURCE_BASE_ID=someBaseId
+ORIGIN_ACCOUNT_API_KEY=someApiKey
+ORIGIN_BASE_ID=someBaseId
+DESTINATION_ACCOUNT_API_KEY=someApiKey
 DESTINATION_BASE_ID=someOtherBaseId
 ```
 
