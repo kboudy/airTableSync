@@ -7,9 +7,6 @@ const axios = require("axios");
 const MAX_RECORDS_PER_REQUEST = 10;
 const API_BASE_URL = "https://api.airtable.com/v0/";
 
-const SOURCE_TABLE_NAME = "Level Team Members";
-const DEST_TABLE_NAME = "Level Team Members - Synced";
-
 const columns_to_copy = [
   { column: "Company Deal Team", table: "Companies" },
   { column: "Company Board Member", table: "Companies" },
