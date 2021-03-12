@@ -10,6 +10,13 @@
       "name": "copy-foreign-keys",
       "skipFiles": ["<node_internals>/**"],
       "program": "${workspaceFolder}/custom scripts/copy-foreign-keys.js"
+    },
+    {
+      "type": "pwa-node",
+      "request": "launch",
+      "name": "copy-level-team-members",
+      "skipFiles": ["<node_internals>/**"],
+      "program": "${workspaceFolder}/custom scripts/copy-level-team-members.js"
     }
   ]
 }

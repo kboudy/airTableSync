@@ -8,7 +8,7 @@ const MAX_RECORDS_PER_REQUEST = 10;
 const API_BASE_URL = "https://api.airtable.com/v0/";
 
 const SOURCE_TABLE_NAME = "Level Team Members";
-const DEST_TABLE_NAME = "Level Team Members - Synced";
+const DEST_TABLE_NAME = "Level Team Members : Employee Sync";
 
 const getRecords = async (
   apiKey,
